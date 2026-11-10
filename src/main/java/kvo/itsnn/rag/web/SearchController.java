@@ -14,6 +14,11 @@ import java.util.*;
 @RequestMapping("/api/rag")
 public class SearchController {
 
+    /** Запас кандидатов сверх topK: несколько файлов-копий одной карточки
+     *  не должны съедать слоты выдачи. */
+    private static final int CANDIDATE_FACTOR = 4;
+    private static final int CANDIDATE_LIMIT  = 300;
+
     private final VectorIndex index;
     private final Embedder embedder;
     private final JdbcTemplate jdbc;
@@ -37,12 +42,24 @@ public class SearchController {
                     .body(Map.of("error", "embedding недоступен: " + e.getMessage()));
         }
 
-        List<VectorIndex.Hit> hits;
+        List<VectorIndex.Hit> candidates;
         try {
-            hits = index.search(q, topK);
+            candidates = index.search(q, Math.min(CANDIDATE_LIMIT, topK * CANDIDATE_FACTOR));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(Map.of("error", "ChromaDB недоступна: " + e.getMessage()));
+        }
+
+        // дедуп: один документ = один лучший чанк
+        Map<Long, String> ownerOf = ownerMap(candidates);
+        candidates.sort(Comparator.comparingDouble(VectorIndex.Hit::score).reversed());
+        List<VectorIndex.Hit> hits = new ArrayList<>(topK);
+        Set<String> seenDocs = new HashSet<>();
+        for (VectorIndex.Hit h : candidates) {
+            String doc = ownerOf.get(h.chunkId());
+            if (doc == null || !seenDocs.add(doc)) continue;   // чанк исчез из MSSQL или документ уже в выдаче
+            hits.add(h);
+            if (hits.size() == topK) break;
         }
 
         List<Map<String, Object>> out = new ArrayList<>(hits.size());
@@ -63,5 +80,16 @@ public class SearchController {
             if (row != null) out.add(row);
         }
         return ResponseEntity.ok(out);
+    }
+
+    /** chunk_id -> document_guid одним запросом для всех кандидатов. */
+    private Map<Long, String> ownerMap(List<VectorIndex.Hit> hits) {
+        if (hits.isEmpty()) return Map.of();
+        String in = String.join(",", Collections.nCopies(hits.size(), "?"));
+        Map<Long, String> m = new HashMap<>();
+        jdbc.query("SELECT chunk_id, document_guid FROM dbo.rag_chunk WHERE chunk_id IN (" + in + ")",
+                rs -> { while (rs.next()) m.put(rs.getLong(1), rs.getString(2)); },
+                hits.stream().map(VectorIndex.Hit::chunkId).toArray());
+        return m;
     }
 }
