@@ -12,7 +12,10 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-
+import org.apache.poi.hssf.extractor.ExcelExtractor;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.xssf.extractor.XSSFExcelExtractor;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 @Component
 public class TextExtractor {
 
@@ -23,13 +26,30 @@ public class TextExtractor {
             case "html", "htm" -> Jsoup.parse(new String(f.bytes(), StandardCharsets.UTF_8)).text();
             case "tif", "tiff", "png", "jpg", "jpeg"
                     -> throw new IllegalArgumentException("скан без текстового слоя — нужен OCR");
+            case "xlsx", "xlsm" -> xlsx(f.bytes());
+            case "xls"          -> xls(f.bytes());
             case "doc"  -> throw new IllegalArgumentException("старый .doc — конвертируйте в .docx");
             case "msg", "rtf"
                     -> throw new IllegalArgumentException("письмо Outlook — конвертируйте в .pdf/.docx");
             default     -> plain(f.bytes());
         };
     }
-
+    private String xlsx(byte[] b) throws IOException {
+        try (XSSFWorkbook wb = new XSSFWorkbook(new ByteArrayInputStream(b));
+             XSSFExcelExtractor ex = new XSSFExcelExtractor(wb)) {
+            String t = ex.getText();
+            if (t.isBlank()) throw new IllegalArgumentException("пустая таблица");
+            return t;
+        }
+    }
+    private String xls(byte[] b) throws IOException {
+        try (HSSFWorkbook wb = new HSSFWorkbook(new ByteArrayInputStream(b));
+             ExcelExtractor ex = new ExcelExtractor(wb)) {
+            String t = ex.getText();
+            if (t.isBlank()) throw new IllegalArgumentException("пустая таблица");
+            return t;
+        }
+    }
     private String pdf(byte[] b) throws IOException {
         try (PDDocument doc = Loader.loadPDF(b)) { return new PDFTextStripper().getText(doc); }
     }
