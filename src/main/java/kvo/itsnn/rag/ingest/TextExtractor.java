@@ -24,6 +24,8 @@ public class TextExtractor {
             case "tif", "tiff", "png", "jpg", "jpeg"
                     -> throw new IllegalArgumentException("скан без текстового слоя — нужен OCR");
             case "doc"  -> throw new IllegalArgumentException("старый .doc — конвертируйте в .docx");
+            case "msg", "rtf"
+                    -> throw new IllegalArgumentException("письмо Outlook — конвертируйте в .pdf/.docx");
             default     -> plain(f.bytes());
         };
     }
@@ -38,6 +40,21 @@ public class TextExtractor {
     }
     private String plain(byte[] b) {
         String s = new String(b, StandardCharsets.UTF_8);
-        return s.contains("\uFFFD") ? new String(b, Charset.forName("windows-1251")) : s;
+        if (s.contains("\uFFFD")) s = new String(b, Charset.forName("windows-1251"));
+        if (isBinaryJunk(s)) throw new IllegalArgumentException("бинарный файл неизвестного формата");
+        return s;
+    }
+
+    /** Эвристика: настоящий текст не содержит заметной доли control-символов.
+     *  Ловит .msg, .ole и прочие бинарники, попавшие в ветку default. */
+    private static boolean isBinaryJunk(String s) {
+        int sample = Math.min(s.length(), 10_000);
+        if (sample == 0) return false;
+        int junk = 0;
+        for (int i = 0; i < sample; i++) {
+            char c = s.charAt(i);
+            if ((c < 32 && c != '\n' && c != '\r' && c != '\t') || c == '\uFFFD') junk++;
+        }
+        return junk > sample / 20;   // >5% мусора — это не текст
     }
 }
