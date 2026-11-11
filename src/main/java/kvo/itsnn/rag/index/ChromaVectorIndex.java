@@ -131,12 +131,14 @@ public class ChromaVectorIndex implements VectorIndex {
         } catch (Exception e) { log.warn("ChromaDB count: {}", e.getMessage()); return -1; }
     }
 
-    /** Пересинхронизация Chroma из MSSQL (аварийное восстановление / ночной rebuild). */
+    /** Пересинхронизация Chroma из MSSQL (аварийное восстановление). */
     @Override
     public synchronized void reload() {
         ensureCollection();
-        List<Long> ids = new ArrayList<>();
-        List<float[]> vecs = new ArrayList<>();
+        final int FLUSH = 50_000;                    // ~75 МБ на батч — не копим всё в памяти
+        List<Long> ids = new ArrayList<>(FLUSH);
+        List<float[]> vecs = new ArrayList<>(FLUSH);
+        long[] total = {0};
         jdbc.query("""
             SELECT e.chunk_id, e.embedding
             FROM dbo.rag_embedding e
@@ -147,9 +149,14 @@ public class ChromaVectorIndex implements VectorIndex {
                 rs -> {
                     ids.add(rs.getLong(1));
                     vecs.add(VecMath.fromLittleEndian(rs.getBytes(2)));
+                    if (ids.size() >= FLUSH) {
+                        addAll(ids, vecs);
+                        total[0] += ids.size();
+                        ids.clear(); vecs.clear();
+                    }
                 }, embedder.model());
-        addAll(ids, vecs);
-        log.info("ChromaDB: пересинхронизировано {} векторов из MSSQL", ids.size());
+        if (!ids.isEmpty()) { addAll(ids, vecs); total[0] += ids.size(); }
+        log.info("ChromaDB: пересинхронизировано {} векторов из MSSQL", total[0]);
     }
 
     private static List<String> idsAsStrings(Collection<Long> ids) {

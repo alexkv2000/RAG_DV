@@ -11,7 +11,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
-
+import java.util.regex.Pattern;
 @Service
 public class IngestService {
 
@@ -26,6 +26,11 @@ public class IngestService {
     private final VectorIndex index;                   // теперь ChromaDB
     private final TransactionTemplate tx;
     private final RagProperties props;
+
+    /** Машиночитаемые конверты: семантики в них нет, шум в выдаче — пропускаем целиком. */
+    private static final List<Pattern> SKIP_FILES = List.of(
+            Pattern.compile("^ON_[A-Z]+_.*\\.xml$", Pattern.CASE_INSENSITIVE),       // форматы ФНС (ЭДО)
+            Pattern.compile("^MessageSourceXml\\.xml$", Pattern.CASE_INSENSITIVE));  // конверт обмена Directum
 
     public IngestService(ContentLoader contentLoader, TextExtractor extractor, Chunker chunker,
                          Embedder embedder, RefRepository refs, ChunkRepository chunks,
@@ -49,7 +54,13 @@ public class IngestService {
             }
 
             List<ChunkPart> parts = new ArrayList<>();
+            int skipped = 0;
             for (ContentLoader.LoadedFile f : files) {
+                String fname = f.fileName();
+                if (fname != null && SKIP_FILES.stream().anyMatch(p -> p.matcher(fname).find())) {
+                    skipped++;
+                    continue;
+                }
                 try {
                     for (String piece : chunker.split(extractor.extract(f)))
                         parts.add(new ChunkPart(piece, f.fileId(), f.fileName()));
@@ -57,8 +68,15 @@ public class IngestService {
                     log.warn("{}: файл '{}' пропущен — {}", ref.guid(), f.fileName(), e.getMessage());
                 }
             }
-            if (parts.isEmpty())
+            if (parts.isEmpty()) {
+                if (skipped == files.size()) {              // все файлы — машинные конверты: это не ошибка
+                    refs.deleteChunks(ref.guid());
+                    index.removeChunks(oldIds);
+                    refs.markIndexed(ref.guid(), Sha256.of(""));
+                    return;
+                }
                 throw new IllegalStateException("ни один файл не дал текст (сканы без OCR?)");
+            }
 
             String joined = parts.stream().map(ChunkPart::text).collect(Collectors.joining("\u0001"));
             byte[] hash = Sha256.of(joined);
@@ -70,7 +88,7 @@ public class IngestService {
 
             String prefix = props.embedding().passagePrefix();
             List<float[]> vectors = embedder.embedAll(
-                    parts.stream().map(p -> prefix + p.text()).toList());
+                    parts.stream().map(p -> prefix + embedInput(p.fileName(), p.text())).toList());
 
             List<Long> ids = tx.execute(st -> {
                 List<Long> newIds = chunks.replaceChunks(ref.guid(), parts);
@@ -101,5 +119,13 @@ public class IngestService {
             log.error("Ошибка индексации {}: {}", ref.guid(), msg);
             log.debug("Ошибка индексации {}: {}", ref.guid(), msg, e);
         }
+    }
+
+    /** Текст для вектора: имя файла несёт реквизиты (номера, даты, «Список VIN...») —
+     *  добавляем его к каждому чанку. rag_chunk.content и content_hash — исходный текст. */
+    private static String embedInput(String fileName, String text) {
+        String name = fileName == null ? "" : fileName.strip();
+        if (name.length() > 100) name = name.substring(0, 100);
+        return name.isEmpty() ? text : name + "\n" + text;
     }
 }
