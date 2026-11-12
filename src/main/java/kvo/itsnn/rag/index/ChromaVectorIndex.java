@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * Векторный индекс на ChromaDB (режим сервера, REST API v2).
@@ -160,7 +159,7 @@ public class ChromaVectorIndex implements VectorIndex {
     }
 
     private static List<String> idsAsStrings(Collection<Long> ids) {
-        return ids.stream().map(String::valueOf).collect(Collectors.toList());
+        return ids.stream().map(String::valueOf).toList();
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

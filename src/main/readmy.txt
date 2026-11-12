@@ -1,0 +1,64 @@
+                        ЛОКАЛЬНО (ваш Spring)                                НАРУЖУ
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ /api/rag/ask, /api/rag/chat                                                  │
+│      │                                                                       │
+│      ▼                                                                       │
+│ 1. LocalEmbedder: запрос → вектор (e5-small, ~10 мс)                         │
+│      │                                                                       │
+│      ▼                                                                       │
+│ 2. ChromaVectorIndex: топ-24 кандидата (ANN-поиск, ~20 мс)                   │
+│      │                                                                       │
+│      ▼ (опц., ступень 2 — см. реранкер ниже)                                 │
+│ 3. [реранкер: скоринг 24 пар, сортировка] → топ-6                            │
+│      │                                                                       │
+│      ▼                                                                       │
+│ 4. Сборка контекста: чанки нумеруются [1]…[6] с меткой «файл, фрагмент N»    │
+│      │                                                                       │
+│      ▼                                                                       │
+│ 5. Промпт: system (правила ответа) + история (для чата) + вопрос + контекст  │
+│      │                                                                       │
+│      ▼                                                                       │      ┌──────────────────┐
+│ 6. LlmClient ── HTTPS, Bearer api-key ───────────────────────────────────────┼─────► ai.loodsen.ru │
+│      │                                                                       │      │ Qwen3.8-27B      │
+│      ▼                                                                       │      └──────────────────┘
+│ 7. Ответ: срезаем
+"); // Qwen3 reasoning-блок
+    private final RagProperties.Llm cfg;
+    private final RestClient http;
+
+    public LlmClient(RagProperties props) {
+        this.cfg = props.llm();
+        var f = new SimpleClientHttpRequestFactory();
+        f.setConnectTimeout(10_000);
+        f.setReadTimeout((int) (cfg.timeoutSeconds() * 1000));
+        this.http = RestClient.builder()
+                .baseUrl(cfg.baseUrl())
+                .defaultHeader("Authorization", "Bearer " + cfg.apiKey())
+                .requestFactory(f)
+                .build();
+    }
+
+    public String chat(List<Message> messages) {
+        Response resp = http.post()
+                .uri("/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new Request(cfg.model(), messages, cfg.temperature(), cfg.maxTokens()))
+                .retrieve()
+                .body(Response.class);
+        if (resp == null || resp.choices() == null || resp.choices().isEmpty())
+            throw new IllegalStateException("LLM: пустой ответ от " + cfg.baseUrl());
+        String text = resp.choices().get(0).message().content();
+        return text == null ? "" : THINK.matcher(text).replaceAll("").strip();
+    }
+
+    public record Message(String role, String content) {
+        public static Message system(String c)    { return new Message("system", c); }
+        public static Message user(String c)      { return new Message("user", c); }
+        public static Message assistant(String c) { return new Message("assistant", c); }
+    }
+    record Request(String model, List<Message> messages, double temperature, int max_tokens) {}
+    record Response(List<Choice> choices, Usage usage) {
+        record Choice(Message2 message) {} record Message2(String content) {}
+        record Usage(int total_tokens) {}
+    }
+}

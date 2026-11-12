@@ -16,7 +16,7 @@ public class Chunker {
         StringBuilder buf = new StringBuilder();
         for (String p : text.replace("\r\n", "\n").replace('\r', '\n').split("\n{2,}")) {
             for (String piece : cutLong(p)) {
-                if (buf.length() + piece.length() > cfg.targetChars() && buf.length() > 0) {
+                if (buf.length() + piece.length() > cfg.targetChars() && !buf.isEmpty()) {
                     chunks.add(buf.toString().strip());
                     buf = new StringBuilder(overlapTail(buf.toString()));
                 }

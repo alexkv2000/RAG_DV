@@ -5,12 +5,13 @@ import kvo.itsnn.rag.util.VecMath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 public class OpenAiCompatibleEmbedder implements Embedder {
 
@@ -24,10 +25,8 @@ public class OpenAiCompatibleEmbedder implements Embedder {
     public OpenAiCompatibleEmbedder(RagProperties props) {
         this.cfg = props.embedding();
         String base = cfg.baseUrl() == null ? "" : cfg.baseUrl().replaceAll("/+$", "");
-        String p = cfg.endpointPath() == null ? "/embeddings"
-                : cfg.endpointPath().startsWith("/") ? cfg.endpointPath() : "/" + cfg.endpointPath();
-        this.path = p;
-        this.url = base + p;
+        this.path = normalizedEndpointPath(cfg.endpointPath());
+        this.url = base + path;
         this.http = RestClient.builder()
                 .baseUrl(base)
                 .defaultHeader("Authorization", "Bearer " + cfg.apiKey())
@@ -35,8 +34,15 @@ public class OpenAiCompatibleEmbedder implements Embedder {
         log.info("Embedding-сервис: url='{}', model='{}', batch={}", url, cfg.model(), cfg.batch());
     }
 
-    @Override public String model()    { return cfg.model(); }
-    @Override public String endpoint() { return url; }
+    @Override
+    public String model() {
+        return cfg.model();
+    }
+
+    @Override
+    public String endpoint() {
+        return url;
+    }
 
     @Override
     public List<float[]> embedAll(List<String> texts) {
@@ -54,9 +60,10 @@ public class OpenAiCompatibleEmbedder implements Embedder {
             } catch (RestClientException e) {   // connection refused, таймаут, HTML вместо JSON
                 throw new EmbeddingServiceException("Embedding-сервис " + url + " недоступен: " + e.getMessage(), e);
             }
-            if (resp == null || resp.data() == null || resp.data().size() != part.size())
+            if (resp == null || resp.data() == null || resp.data().size() != part.size()) {
                 throw new EmbeddingServiceException("Некорректный ответ от " + url
                         + " — ожидается {\"data\":[{\"embedding\":[...]}]}", null);
+            }
             resp.data().forEach(d -> out.add(VecMath.normalize(d.embedding())));
         }
         return out;
@@ -74,13 +81,46 @@ public class OpenAiCompatibleEmbedder implements Embedder {
 
     /** Ответ в одну строку, ≤300 символов; HTML распознаём и помечаем. */
     private static String brief(String body) {
-        if (body == null || body.isBlank()) return "";
+        if (body == null || body.isBlank()) {
+            return "";
+        }
         String s = body.replaceAll("\\s+", " ").trim();
-        if (s.startsWith("<")) return "[HTML вместо JSON — это страница UI, а не API-путь]";
+        if (s.startsWith("<")) {
+            return "[HTML вместо JSON — это страница UI, а не API-путь]";
+        }
         return s.length() > 300 ? s.substring(0, 300) + "…" : s;
+    }
+
+    /** Путь запроса: по умолчанию /embeddings; гарантируем ведущий '/'. */
+    private static String normalizedEndpointPath(String p) {
+        if (p == null) {
+            return "/embeddings";
+        }
+        return p.startsWith("/") ? p : "/" + p;
     }
 
     record RequestDto(String model, List<String> input) {}
     record ResponseDto(List<Item> data) {}
-    record Item(float[] embedding) {}
+
+    /** equals/hashCode переопределены: для float[] сгенерированные record'ом
+     *  методы сравнивали бы ссылки, а не содержимое массива. */
+    record Item(float[] embedding) {
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            Item that = (Item) o;
+            return Arrays.equals(embedding, that.embedding);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(embedding);
+        }
+    }
 }

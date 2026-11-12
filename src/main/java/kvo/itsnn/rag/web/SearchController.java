@@ -32,7 +32,7 @@ public class SearchController {
     public record SearchRequest(String query, int topK) {}
 
     @PostMapping("/search")
-    public ResponseEntity<?> search(@RequestBody SearchRequest req) {
+    public ResponseEntity<Object> search(@RequestBody SearchRequest req) {
         int topK = Math.clamp(req.topK() <= 0 ? 5 : req.topK(), 1, 50);
         float[] q;
         try {
@@ -57,9 +57,12 @@ public class SearchController {
         Set<String> seenDocs = new HashSet<>();
         for (VectorIndex.Hit h : candidates) {
             String doc = ownerOf.get(h.chunkId());
-            if (doc == null || !seenDocs.add(doc)) continue;   // чанк исчез из MSSQL или документ уже в выдаче
-            hits.add(h);
-            if (hits.size() == topK) break;
+            if (doc != null && seenDocs.add(doc)) {   // чанк жив в MSSQL и документ ещё не в выдаче
+                hits.add(h);
+            }
+            if (hits.size() == topK) {
+                break;
+            }
         }
 
         List<Map<String, Object>> out = new ArrayList<>(hits.size());
@@ -91,5 +94,19 @@ public class SearchController {
                 rs -> { while (rs.next()) m.put(rs.getLong(1), rs.getString(2)); },
                 hits.stream().map(VectorIndex.Hit::chunkId).toArray());
         return m;
+    }
+    @GetMapping("/files")
+    public List<Map<String, Object>> files() {
+        return jdbc.query("""
+            SELECT TOP (200) c.file_name, COUNT(*) AS chunks, MAX(r.indexed_at) AS last_indexed
+            FROM dbo.rag_chunk c
+            JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid
+            WHERE r.status = 'I'
+            GROUP BY c.file_name
+            ORDER BY MAX(r.indexed_at) DESC
+            """, (rs, i) -> Map.of(
+                "fileName", rs.getString(1),
+                "chunks", rs.getInt(2),
+                "indexedAt", String.valueOf(rs.getTimestamp(3))));
     }
 }

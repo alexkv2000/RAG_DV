@@ -45,6 +45,29 @@
             <artifactId>jsoup</artifactId>
             <version>1.17.2</version>
         </dependency>
+        <!-- OCR сканов (Tesseract, JNA; Windows-библиотеки внутри jar) -->
+        <dependency>
+            <groupId>net.sourceforge.tess4j</groupId>
+            <artifactId>tess4j</artifactId>
+            <version>5.18.0</version>
+            <exclusions>
+                <exclusion>   <!-- у нас pdfbox 3.x, у tess4j — 2.x; его pdf-утилиты не используем -->
+                    <groupId>org.apache.pdfbox</groupId>
+                    <artifactId>pdfbox</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- .doc (приказы в старом Word) и .msg (письма Outlook) -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-scratchpad</artifactId>
+            <version>5.3.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.jai-imageio</groupId>
+            <artifactId>jai-imageio-jpeg2000</artifactId>
+            <version>1.4.0</version>
+        </dependency>
         <!-- Локальные эмбеддинги (DJL + PyTorch) -->
         <dependency>
             <groupId>ai.djl</groupId>
@@ -65,7 +88,7 @@
             <groupId>ai.djl.pytorch</groupId>
             <artifactId>pytorch-native-cpu</artifactId>
             <version>2.7.1</version>
-            <classifier>win-x86_64</classifier>   <!-- реальная сборка, а не заглушка -->
+            <classifier>win-x86_64</classifier>
             <scope>runtime</scope>
         </dependency>
         <dependency>
