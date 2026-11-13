@@ -20,22 +20,23 @@ public class RefRepository {
      */
     public List<DocumentRef> claimForIndexing(int limit) {
         String sql = """
-                WITH picked AS (
-                    SELECT TOP (?) document_guid
-                    FROM dbo.rag_document_ref WITH (READPAST, UPDLOCK)
-                    WHERE status = 'N'
-                    ORDER BY src_modified_at, document_guid
-                )
-                UPDATE r
-                   SET r.status = 'P', r.claimed_at = SYSUTCDATETIME(),
-                       r.retry_count = r.retry_count + 1, r.updated_at = SYSUTCDATETIME()
-                OUTPUT inserted.document_guid, inserted.classifier, inserted.retry_count
-                FROM dbo.rag_document_ref r
-                JOIN picked p ON p.document_guid = r.document_guid;
-                """;
+            WITH picked AS (
+                SELECT DISTINCT TOP (?) document_guid, src_modified_at
+                FROM dbo.rag_document_ref WITH (READPAST, UPDLOCK)
+                WHERE status = 'N'
+                ORDER BY src_modified_at, document_guid
+            )
+            UPDATE r
+               SET r.status = 'P', r.claimed_at = SYSUTCDATETIME(),
+                   r.retry_count = r.retry_count + 1, r.updated_at = SYSUTCDATETIME()
+            OUTPUT inserted.document_guid, inserted.classifier, inserted.retry_count
+            FROM dbo.rag_document_ref r
+            JOIN picked p ON p.document_guid = r.document_guid;
+            """;
         return jdbc.query(sql, (rs, i) -> new DocumentRef(
-                UUID.fromString(rs.getString("document_guid")),
-                rs.getString("classifier"), rs.getInt("retry_count")), limit);
+                        UUID.fromString(rs.getString("document_guid")),
+                        rs.getString("classifier"), rs.getInt("retry_count")), limit)
+                .stream().distinct().toList();     // OUTPUT всё ещё по строкам — дедупим
     }
 
     public boolean sameHash(UUID guid, byte[] hash) {
@@ -84,7 +85,7 @@ public class RefRepository {
                 UPDATE dbo.rag_document_ref
                    SET status='X', claimed_at=NULL, updated_at=SYSUTCDATETIME()
                  WHERE document_guid=? AND status='D'
-                """, guid) == 1;
+                """, guid) > 0;     // удалённые документы из карточки более одного никогда не вычищались бы
     }
 
     public List<Long> chunkIdsOf(UUID guid) {
@@ -136,7 +137,7 @@ public class RefRepository {
         Integer n = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM dbo.rag_embedding e
                 JOIN dbo.rag_chunk c        ON c.chunk_id = e.chunk_id
-                JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid
+                JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid AND r.row_id = c.file_id
                 WHERE e.model = ? AND r.status = 'I'
                 """, Integer.class, model);
         return n == null ? 0 : n;

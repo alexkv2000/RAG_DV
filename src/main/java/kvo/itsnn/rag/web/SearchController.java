@@ -14,10 +14,12 @@ import java.util.*;
 @RequestMapping("/api/rag")
 public class SearchController {
 
-    /** Запас кандидатов сверх topK: несколько файлов-копий одной карточки
-     *  не должны съедать слоты выдачи. */
+    /**
+     * Запас кандидатов сверх topK: несколько файлов-копий одной карточки
+     * не должны съедать слоты выдачи.
+     */
     private static final int CANDIDATE_FACTOR = 4;
-    private static final int CANDIDATE_LIMIT  = 300;
+    private static final int CANDIDATE_LIMIT = 300;
 
     private final VectorIndex index;
     private final Embedder embedder;
@@ -26,10 +28,14 @@ public class SearchController {
 
     public SearchController(VectorIndex index, Embedder embedder,
                             JdbcTemplate jdbc, RagProperties props) {
-        this.index = index; this.embedder = embedder; this.jdbc = jdbc; this.props = props;
+        this.index = index;
+        this.embedder = embedder;
+        this.jdbc = jdbc;
+        this.props = props;
     }
 
-    public record SearchRequest(String query, int topK) {}
+    public record SearchRequest(String query, int topK) {
+    }
 
     @PostMapping("/search")
     public ResponseEntity<Object> search(@RequestBody SearchRequest req) {
@@ -68,8 +74,8 @@ public class SearchController {
         List<Map<String, Object>> out = new ArrayList<>(hits.size());
         for (VectorIndex.Hit h : hits) {
             Map<String, Object> row = jdbc.queryForObject("""
-                    SELECT c.document_guid, c.file_name, c.chunk_no, c.content
-                    FROM dbo.rag_chunk c WHERE c.chunk_id = ?""",
+                            SELECT document_guid, file_name, chunk_no, content, file_id
+                            FROM dbo.rag_chunk WHERE chunk_id = ?""",
                     (rs, rn) -> {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("chunkId", h.chunkId());
@@ -78,6 +84,8 @@ public class SearchController {
                         m.put("chunkNo", rs.getInt(3));
                         m.put("text", rs.getString(4));
                         m.put("score", h.score());
+                        m.put("rowId", rs.getString(5));                    // file_id — карточка файла
+                        m.put("url", props.docCardUrl(rs.getString(5)));
                         return m;
                     }, h.chunkId());
             if (row != null) out.add(row);
@@ -85,26 +93,31 @@ public class SearchController {
         return ResponseEntity.ok(out);
     }
 
-    /** chunk_id -> document_guid одним запросом для всех кандидатов. */
+    /**
+     * chunk_id -> document_guid одним запросом для всех кандидатов.
+     */
     private Map<Long, String> ownerMap(List<VectorIndex.Hit> hits) {
         if (hits.isEmpty()) return Map.of();
         String in = String.join(",", Collections.nCopies(hits.size(), "?"));
         Map<Long, String> m = new HashMap<>();
         jdbc.query("SELECT chunk_id, document_guid FROM dbo.rag_chunk WHERE chunk_id IN (" + in + ")",
-                rs -> { while (rs.next()) m.put(rs.getLong(1), rs.getString(2)); },
+                rs -> {
+                    while (rs.next()) m.put(rs.getLong(1), rs.getString(2));
+                },
                 hits.stream().map(VectorIndex.Hit::chunkId).toArray());
         return m;
     }
+
     @GetMapping("/files")
     public List<Map<String, Object>> files() {
         return jdbc.query("""
-            SELECT TOP (200) c.file_name, COUNT(*) AS chunks, MAX(r.indexed_at) AS last_indexed
-            FROM dbo.rag_chunk c
-            JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid
-            WHERE r.status = 'I'
-            GROUP BY c.file_name
-            ORDER BY MAX(r.indexed_at) DESC
-            """, (rs, i) -> Map.of(
+                SELECT TOP (200) c.file_name, COUNT(*) AS chunks, MAX(r.indexed_at) AS last_indexed
+                FROM dbo.rag_chunk c
+                JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid AND r.row_id = c.file_id
+                WHERE r.status = 'I'
+                GROUP BY c.file_name
+                ORDER BY MAX(r.indexed_at) DESC
+                """, (rs, i) -> Map.of(
                 "fileName", rs.getString(1),
                 "chunks", rs.getInt(2),
                 "indexedAt", String.valueOf(rs.getTimestamp(3))));

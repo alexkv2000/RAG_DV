@@ -13,5 +13,7 @@ public record LlmProperties(
         @DefaultValue("120")   long timeoutSeconds,
         @DefaultValue("3")     int historyTurns,
         @DefaultValue("6")     int contextChunks,
-        @DefaultValue("24")    int candidateChunks) {
+        @DefaultValue("24")    int candidateChunks,
+        // true → vLLM: chat_template_kwargs.enable_thinking=false (Qwen3 не «думает», ответ в разы быстрее)
+        @DefaultValue("true")  boolean disableThinking) {
 }

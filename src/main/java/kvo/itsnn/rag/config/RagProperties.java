@@ -5,6 +5,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 
 import java.time.Duration;
 import java.time.LocalTime;
+import java.util.Locale;
 import java.util.Map;
 
 @ConfigurationProperties(prefix = "rag")
@@ -21,7 +22,8 @@ public record RagProperties(
         Embedding embedding,
         @DefaultValue Chroma chroma,
         @DefaultValue Ocr ocr,
-        Content content) {
+        Content content,
+        @DefaultValue Ui ui) {
 
     // было 1200/200 — снижено из-за лимита 512 токенов у модели
     public record Chunk(@DefaultValue("400") int targetChars,
@@ -52,4 +54,14 @@ public record RagProperties(
     /** Корни файловых хранилищ Docsvision: имя из dvsys_binary_storages.Name → корень (UNC/папка).
      *  Для стора 'Database' (хранение в БД) корень не нужен — байты приходят из колонки content. */
     public record Content(Map<String, String> roots) {}
+    /** База ссылки на карточку в Docsvision Thin Client. */
+    public record Ui(@DefaultValue("https://sdo.gaz.ru/DocsvisionThinClient/#/TaskView/")
+                     String docCardUrl) {}
+    /** Полный URL: base + row_id (GUID в верхнем регистре, как в вашем примере).
+     *  null, если база не задана — фронт тогда не рисует ссылку. */
+    public String docCardUrl(String rowId) {
+        String base = ui() == null || ui().docCardUrl() == null ? "" : ui().docCardUrl().strip();
+        if (base.isEmpty() || rowId == null || rowId.isBlank()) return null;
+        return base.replaceAll("/+$", "") + rowId.toUpperCase(Locale.ROOT);
+    }
 }

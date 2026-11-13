@@ -49,8 +49,11 @@ public class ChromaVectorIndex implements VectorIndex {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onStart() {                       // старт приложения не валится, если Chroma ещё не поднята
-        try { ensureCollection(); }
-        catch (Exception e) { log.warn("ChromaDB недоступна при старте ({}): {}", cfg.baseUrl(), e.getMessage()); }
+        try {
+            ensureCollection();
+        } catch (Exception e) {
+            log.warn("ChromaDB недоступна при старте ({}): {}", cfg.baseUrl(), e.getMessage());
+        }
     }
 
     private synchronized void ensureCollection() {
@@ -67,19 +70,25 @@ public class ChromaVectorIndex implements VectorIndex {
         log.info("ChromaDB: коллекция '{}' (id={})", collectionName, collectionId);
     }
 
-    private String uri(String action) { return API + "/" + collectionId + "/" + action; }
+    private String uri(String action) {
+        return API + "/" + collectionId + "/" + action;
+    }
 
     @Override
-    public void addAll(List<Long> chunkIds, List<float[]> vectors) {
+    public void addAll(List<Long> chunkIds, List<float[]> vectors, List<Map<String, String>> metadatas) {
         if (chunkIds.isEmpty()) return;
         ensureCollection();
         for (int from = 0; from < chunkIds.size(); from += cfg.batch()) {
             int to = Math.min(chunkIds.size(), from + cfg.batch());
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("ids", idsAsStrings(chunkIds.subList(from, to)));
+            body.put("embeddings", vectors.subList(from, to));
+            if (metadatas != null && !metadatas.isEmpty()) {
+                body.put("metadatas", metadatas.subList(from, to));
+            }
             http.post().uri(uri("upsert"))
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of(
-                            "ids",       idsAsStrings(chunkIds.subList(from, to)),
-                            "embeddings", vectors.subList(from, to)))
+                    .body(body)
                     .retrieve().toBodilessEntity();
         }
     }
@@ -98,14 +107,18 @@ public class ChromaVectorIndex implements VectorIndex {
     }
 
     @Override
-    public List<Hit> search(float[] q, int topK) {
+    public List<Hit> search(float[] q, int topK, String classifier) {
         ensureCollection();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("query_embeddings", List.of(q));
+        body.put("n_results", topK);
+        body.put("include", List.of("distances"));
+        if (classifier != null && !classifier.isBlank()) {
+            body.put("where", Map.of("classifier", Map.of("$eq", classifier)));
+        }
         QueryResp resp = http.post().uri(uri("query"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of(
-                        "query_embeddings", List.of(q),
-                        "n_results",        topK,
-                        "include",          List.of("distances")))
+                .body(body)
                 .retrieve().body(QueryResp.class);
         if (resp == null || resp.ids() == null || resp.ids().isEmpty()) return List.of();
         List<String> ids = resp.ids().get(0);
@@ -114,8 +127,6 @@ public class ChromaVectorIndex implements VectorIndex {
         List<Hit> out = new ArrayList<>(ids.size());
         for (int i = 0; i < ids.size(); i++) {
             double d = i < dist.size() ? dist.get(i) : Double.NaN;
-            // cosine-расстояние = 1 - cos(сходство); векторы нормированы,
-            // поэтому 1 - distance эквивалентен прежнему скалярному произведению
             out.add(new Hit(Long.parseLong(ids.get(i)), 1.0 - d));
         }
         return out;
@@ -127,35 +138,51 @@ public class ChromaVectorIndex implements VectorIndex {
             ensureCollection();
             Integer n = http.get().uri(uri("count")).retrieve().body(Integer.class);
             return n == null ? -1 : n;
-        } catch (Exception e) { log.warn("ChromaDB count: {}", e.getMessage()); return -1; }
+        } catch (Exception e) {
+            log.warn("ChromaDB count: {}", e.getMessage());
+            return -1;
+        }
     }
 
-    /** Пересинхронизация Chroma из MSSQL (аварийное восстановление). */
+    //** Пересинхронизация Chroma из MSSQL — теперь и с метаданными. */
     @Override
     public synchronized void reload() {
         ensureCollection();
-        final int FLUSH = 50_000;                    // ~75 МБ на батч — не копим всё в памяти
+        final int FLUSH = 50_000;
         List<Long> ids = new ArrayList<>(FLUSH);
         List<float[]> vecs = new ArrayList<>(FLUSH);
+        List<Map<String, String>> metas = new ArrayList<>(FLUSH);
         long[] total = {0};
         jdbc.query("""
-            SELECT e.chunk_id, e.embedding
-            FROM dbo.rag_embedding e
-            JOIN dbo.rag_chunk c        ON c.chunk_id = e.chunk_id
-            JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid
-            WHERE e.model = ? AND r.status = 'I'
-            """,
+                        SELECT e.chunk_id, e.embedding, c.document_guid, r.classifier
+                        FROM dbo.rag_embedding e
+                        JOIN dbo.rag_chunk c        ON c.chunk_id = e.chunk_id
+                        JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid AND r.row_id = c.file_id
+                        WHERE e.model = ? AND r.status = 'I'
+                        """,
                 rs -> {
                     ids.add(rs.getLong(1));
                     vecs.add(VecMath.fromLittleEndian(rs.getBytes(2)));
+                    metas.add(Map.of("document_guid", rs.getString(3),
+                            "classifier", nz(rs.getString(4))));
                     if (ids.size() >= FLUSH) {
-                        addAll(ids, vecs);
+                        addAll(ids, vecs, metas);
                         total[0] += ids.size();
-                        ids.clear(); vecs.clear();
+                        ids.clear();
+                        vecs.clear();
+                        metas.clear();
                     }
                 }, embedder.model());
-        if (!ids.isEmpty()) { addAll(ids, vecs); total[0] += ids.size(); }
+        if (!ids.isEmpty()) {
+            addAll(ids, vecs, metas);
+            total[0] += ids.size();
+        }
         log.info("ChromaDB: пересинхронизировано {} векторов из MSSQL", total[0]);
+    }
+
+    //    важно: Chroma не принимает null в значениях метаданных
+    private static String nz(String s) {
+        return s == null ? "" : s;
     }
 
     private static List<String> idsAsStrings(Collection<Long> ids) {
@@ -163,8 +190,10 @@ public class ChromaVectorIndex implements VectorIndex {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record CollectionDto(String id, String name) {}
+    record CollectionDto(String id, String name) {
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record QueryResp(List<List<String>> ids, List<List<Double>> distances) {}
+    record QueryResp(List<List<String>> ids, List<List<Double>> distances) {
+    }
 }

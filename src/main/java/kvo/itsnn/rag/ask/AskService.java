@@ -44,8 +44,8 @@ public class AskService {
                 cfg.candidateChunks(), cfg.contextChunks(), props.embedding().queryPrefix());
     }
 
-    public record Source(String documentGuid, String fileName, int chunkNo, double score) {
-    }
+    /** url — ссылка на карточку файла: rag.ui.doc-card-url + file_id (= rag_document_ref.row_id). */
+    public record Source(String documentGuid, String fileName, int chunkNo, double score, String url) {}
 
     public record AskResult(String answer, List<Source> sources) {
     }
@@ -53,14 +53,22 @@ public class AskService {
     /**
      * Аналог строки выдачи /api/rag/search, но записью.
      */
-    private record ChunkHit(String documentGuid, String fileName, int chunkNo, double score, String text) {
-    }
+    private record ChunkHit(String documentGuid, String fileName, int chunkNo, double score,
+                            String text, String rowId) {}
 
     public AskResult ask(String query, List<LlmClient.Message> history) {
-        List<ChunkHit> best = retrieve(query);
+        return ask(query, null, history);
+    }
+
+    public AskResult ask(String query, String classifier, List<LlmClient.Message> history) {
+        List<ChunkHit> best = retrieve(query, classifier);
         if (best.isEmpty()) {
             log.warn("RAG: retrieve пустой для '{}'", query);
-            return new AskResult("В индексе пока нет документов для поиска.", List.of());
+            String scope = classifier == null || classifier.isBlank()
+                    ? "" : " по признаку «" + classifier + "»";
+            return new AskResult("По вашему вопросу" + scope + " не нашлось документов в базе знаний. "
+                    + "Попробуйте переформулировать запрос"
+                    + (scope.isEmpty() ? "" : " или выбрать «Все документы»") + ".", List.of());
         }
 
         StringBuilder ctx = new StringBuilder();
@@ -87,17 +95,21 @@ public class AskService {
         log.info("RAG: вопрос='{}', чанков={}, LLM {} мс", query, best.size(), System.currentTimeMillis() - t0);
 
         List<Source> sources = best.stream()
-                .map(h -> new Source(h.documentGuid(), h.fileName(), h.chunkNo(), h.score())).toList();
+                .map(h -> new Source(h.documentGuid(), h.fileName(), h.chunkNo(), h.score(),
+                        props.docCardUrl(h.rowId())))
+                .toList();
         return new AskResult(answer, sources);
     }
 
     /**
      * Как в SearchController: вектор запроса (с query-префиксом e5) → Chroma →
      * тексты чанков из MSSQL → дедуп по документу → первые contextChunks.
+     * row_id в rag_embedding нет (там только chunk_id/model/dim/embedding) —
+     * GUID для ссылки DocsVision берём прямо из rag_chunk.document_guid.
      */
-    private List<ChunkHit> retrieve(String query) {
+    private List<ChunkHit> retrieve(String query, String classifier) {
         float[] q = embedder.embedAll(List.of(props.embedding().queryPrefix() + query)).get(0);
-        List<VectorIndex.Hit> candidates = index.search(q, cfg.candidateChunks());
+        List<VectorIndex.Hit> candidates = index.search(q, cfg.candidateChunks(), classifier);
         if (candidates.isEmpty()) return List.of();
         candidates.sort(Comparator.comparingDouble(VectorIndex.Hit::score).reversed());
 
@@ -106,12 +118,14 @@ public class AskService {
 
         String in = String.join(",", Collections.nCopies(candidates.size(), "?"));
         List<ChunkHit> ordered = new ArrayList<>(candidates.size());
-        jdbc.query("SELECT chunk_id, document_guid, file_name, chunk_no, content FROM dbo.rag_chunk WHERE chunk_id IN (" + in + ")",
+        jdbc.query("SELECT chunk_id, document_guid, file_name, chunk_no, content, file_id " +
+                        "FROM dbo.rag_chunk WHERE chunk_id IN (" + in + ")",
                 rs -> {
                     while (rs.next()) {
                         long id = rs.getLong("chunk_id");
                         ordered.add(new ChunkHit(rs.getString("document_guid"), rs.getString("file_name"),
-                                rs.getInt("chunk_no"), scoreOf.getOrDefault(id, 0.0), rs.getString("content")));
+                                rs.getInt("chunk_no"), scoreOf.getOrDefault(id, 0.0), rs.getString("content"),
+                                rs.getString("file_id")));
                     }
                 },
                 candidates.stream().map(VectorIndex.Hit::chunkId).toArray());

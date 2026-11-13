@@ -40,6 +40,7 @@ public class AdminController {
     public Map<String, Object> stats() {
         Map<String, Object> out = new LinkedHashMap<>(refs.statusCounts());
         out.put("indexSize", index.size());
+        out.put("paused", refs.ingestPaused()); //статус версии чата
         return out;
     }
 

@@ -1,6 +1,7 @@
 package kvo.itsnn.rag.llm;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import kvo.itsnn.rag.config.LlmProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +15,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /** Клиент OpenAI-совместимого /chat/completions (ai.loodsen.ru). */
@@ -43,23 +45,28 @@ public class LlmClient {
                 .defaultHeader("Authorization", "Bearer " + cfg.apiKey())
                 .requestFactory(f)
                 .build();
-        log.info("LlmClient: url='{}', model='{}', maxTokens={}, temperature={}, timeout={} с",
-                cfg.baseUrl(), cfg.model(), cfg.maxTokens(), cfg.temperature(), cfg.timeoutSeconds());
+        log.info("LlmClient: url='{}', model='{}', maxTokens={}, temperature={}, timeout={} с, thinking={}",
+                cfg.baseUrl(), cfg.model(), cfg.maxTokens(), cfg.temperature(), cfg.timeoutSeconds(),
+                cfg.disableThinking() ? "выключен" : "включён");
     }
 
     public String chat(List<Message> messages) {
         String url = cfg.baseUrl().replaceAll("/+$", "") + "/chat/completions";
         long t0 = System.currentTimeMillis();
+        // vLLM: размышления Qwen3 выключаем на уровне chat-шаблона — быстрее и дешевле
+        Map<String, Object> noThink = cfg.disableThinking()
+                ? Map.of("enable_thinking", false) : null;
         String raw;
         try {
             byte[] bytes = http.post()
                     .uri("/chat/completions")
                     .accept(MediaType.APPLICATION_JSON)   // шлюзу намекаем, что ждём JSON
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(new Request(cfg.model(), messages, cfg.temperature(), cfg.maxTokens()))
+                    .body(new Request(cfg.model(), messages, cfg.temperature(), cfg.maxTokens(), noThink))
                     .retrieve()
                     .body(byte[].class);                  // byte[] читается при любом content-type
             raw = bytes == null ? "" : new String(bytes, StandardCharsets.UTF_8);
+            log.debug("LLM RAW: {}", raw);
         } catch (RestClientResponseException e) {
             throw new IllegalStateException("LLM " + e.getStatusCode().value() + " на " + url
                     + hint(e.getStatusCode().value()) + ": " + brief(e.getResponseBodyAsString()), e);
@@ -84,8 +91,37 @@ public class LlmClient {
                 System.currentTimeMillis() - t0, messages.size(),
                 resp.usage() == null ? "?" : resp.usage().total_tokens());
 
-        String text = c.message().content();
-        return text == null ? "" : THINK.matcher(text).replaceAll("").strip();
+        String text = stripThink(c.message().content());
+        if (text.isBlank()) {
+            // Qwen3 (thinking) может положить весь ответ в поле размышлений, оставив content пустым;
+            // vLLM 0.28 называет его "reasoning", другие шлюзы — "reasoning_content" — берём любой
+            String r = c.message().reasoning_content() != null
+                    ? c.message().reasoning_content() : c.message().reasoning();
+            String reasoning = stripThink(r);
+            if (!reasoning.isBlank()) {
+                log.warn("LLM: content пуст — ответ собран из размышлений ({} симв.)", reasoning.length());
+                text = reasoning;
+            }
+        }
+        if (text.isBlank()) {
+            throw new IllegalStateException("LLM: модель не вернула текст ответа (finish_reason="
+                    + c.finish_reason() + ", tokens="
+                    + (resp.usage() == null ? "?" : resp.usage().total_tokens())
+                    + ") — вероятно, весь лимит израсходован на блок размышлений");
+        }
+        return text;
+    }
+
+    private static String stripThink(String s) {
+        if (s == null) {
+            return "";
+        }
+        String out = THINK.matcher(s).replaceAll("");
+        int open = out.indexOf("<" + "think" + ">");   // конкатенация соберётся в тег при компиляции
+        if (open >= 0) {
+            out = out.substring(0, open);
+        }
+        return out.strip();
     }
 
     private static String hint(int status) {
@@ -108,12 +144,17 @@ public class LlmClient {
         public static Message user(String c)      { return new Message("user", c); }
         public static Message assistant(String c) { return new Message("assistant", c); }
     }
-    record Request(String model, List<Message> messages, double temperature, int max_tokens) {}
+
+    /** NON_NULL: без флага поле chat_template_kwargs не попадает в JSON вовсе. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record Request(String model, List<Message> messages, double temperature, int max_tokens,
+                   Map<String, Object> chat_template_kwargs) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record Response(List<Choice> choices, Usage usage) {
         @JsonIgnoreProperties(ignoreUnknown = true) record Choice(Message2 message, String finish_reason) {}
-        @JsonIgnoreProperties(ignoreUnknown = true) record Message2(String content) {}
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        record Message2(String content, String reasoning_content, String reasoning) {}   // vLLM 0.28 → "reasoning"
         @JsonIgnoreProperties(ignoreUnknown = true) record Usage(int total_tokens) {}
     }
 }

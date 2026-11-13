@@ -24,13 +24,17 @@ public class ChatService {
 
     public record ChatReply(String sessionId, String answer, List<AskService.Source> sources) {}
 
-    public ChatReply chat(String sessionId, String message) {
+    public ChatReply chat(String sessionId, String message, String classifier) {
         String sid = (sessionId == null || sessionId.isBlank()) ? UUID.randomUUID().toString() : sessionId;
         var history = sessions.computeIfAbsent(sid, k -> new ConcurrentLinkedDeque<>());
-        AskService.AskResult r = ask.ask(message, List.copyOf(history));
+        AskService.AskResult r = ask.ask(message, classifier, List.copyOf(history));
         history.add(LlmClient.Message.user(message));
-        history.add(LlmClient.Message.assistant(r.answer()));
+        String a = r.answer() == null ? "" : r.answer().strip();
+        if (!a.isBlank() && !"undefined".equalsIgnoreCase(a)) {   // мусорный ответ в историю не попадёт
+            history.add(LlmClient.Message.assistant(a));
+        }
         while (history.size() > cfg.historyTurns() * 2) history.pollFirst();
         return new ChatReply(sid, r.answer(), r.sources());
     }
+    public ChatReply chat(String sessionId, String message) { return chat(sessionId, message, null); }
 }

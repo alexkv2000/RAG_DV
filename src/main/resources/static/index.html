@@ -1,30 +1,287 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><title>RAG-чат</title><style>
-    body{font-family:"Segoe UI",sans-serif;max-width:780px;margin:24px auto;background:#f5f6f8;padding:0 12px}
+    body{font-family:"Segoe UI",sans-serif;max-width:800px;margin:24px auto;background:#f0f2f6;padding:0 12px}
     h3{color:#334}
-    #chat{display:flex;flex-direction:column;gap:10px;height:60vh;overflow-y:auto;padding:12px;
-        background:#fff;border:1px solid #ddd;border-radius:8px}
-    .m{padding:8px 12px;border-radius:10px;max-width:88%;white-space:pre-wrap;line-height:1.4}
-    .u{align-self:flex-end;background:#dcf8c6}
-    .a{align-self:flex-start;background:#eef1f5}
-    .src{font-size:12px;color:#666;margin-top:6px;border-top:1px solid #dde;padding-top:4px}
+    #top{display:flex;align-items:center;justify-content:space-between}
+    #top h3{display:flex;align-items:center;gap:8px}
+    .ver{font-size:11px;color:#9aa3b5;font-weight:400;background:#e9edf4;padding:1px 7px;border-radius:999px}
+    #newChat{background:#fff;color:#1d4ed8;border:1px solid #8fb0f7;padding:6px 12px;font-size:.9em}
+    #newChat:hover{background:#e3edff;border-color:#2563eb}
+
+    /* ===== вкладки ===== */
+    #tabs{display:flex;gap:6px;margin-top:12px}
+    .tab{flex:1;padding:9px 10px;border:1px solid #c9d2e3;border-bottom:none;border-radius:8px 8px 0 0;
+        background:#e4e9f4;color:#42506b;font-size:.95em}
+    .tab.on{background:#fff;color:#14337a;font-weight:600;border-color:#dde}
+    #viewAdmin{display:flex;flex-direction:column;gap:12px;background:#fff;border:1px solid #dde;
+        border-radius:10px;padding:14px;height:calc(62vh + 58px);overflow-y:auto}
+    #viewAdmin[hidden]{display:none}     /* display:flex перебивает hidden — возвращаем */
+
+    #chat{display:flex;flex-direction:column;gap:10px;height:62vh;overflow-y:auto;padding:14px;
+        background:#fff;border:1px solid #dde;border-radius:10px}
+    .m{padding:10px 14px;border-radius:12px;line-height:1.55}
+    .u{align-self:flex-end;background:#dcf8c6;white-space:pre-wrap;max-width:80%}
+    .a{align-self:flex-start;background:#eef1f6;width:88%}
+    .a .p{margin:6px 0;font-size:15px;color:#1c2333}
+    .a h4{margin:12px 0 6px;font-size:1.06em;color:#14337a;border-bottom:2px solid #c7d6f5;padding-bottom:3px}
+    .a h4:first-child{margin-top:0}
+    .a strong{color:#0f2f73}
+    .a ul,.a ol{margin:8px 0;padding:0;list-style:none}
+    .a li{position:relative;margin:4px 0;padding:4px 10px 4px 26px;background:#f6f8fc;
+        border-left:3px solid #7f9cf5;border-radius:0 6px 6px 0;font-size:14.5px}
+    .a ul li::before{content:"▪";position:absolute;left:10px;color:#2563eb}
+    .a ol{counter-reset:li}
+    .a ol li::before{counter-increment:li;content:counter(li);position:absolute;left:8px;top:5px;
+        background:#2563eb;color:#fff;border-radius:4px;font-size:11px;min-width:15px;text-align:center;padding:1px 2px}
+    .a blockquote{margin:10px 0;padding:7px 14px;border-left:4px solid #f59e0b;background:#fdf6e7;
+        border-radius:0 8px 8px 0;color:#5a4a1f;font-style:italic;font-size:14px}
+    .a blockquote::before{content:"❝ ";color:#d97706}
+    .cite{display:inline-block;background:#ffffff;border:1px solid #8fb0f7;color:#1d4ed8;border-radius:999px;
+        padding:0 9px;font-size:.78em;line-height:1.7;white-space:nowrap;vertical-align:baseline;
+        box-shadow:0 1px 1px rgba(29,78,216,.12)}
+    .cite::before{content:"📄 "}
+    .cite.linked{cursor:pointer}
+    .cite.linked:hover{background:#e3edff;border-color:#2563eb}
+    .a code{background:#e2e4ea;padding:1px 5px;border-radius:4px;font-size:.9em}
+    .a hr{border:0;border-top:1px solid #d5dbe7;margin:8px 0}
+    .sources{align-self:flex-start;width:88%;background:#fafbfd;border:1px dashed #b9c3d6;border-radius:10px;
+        padding:8px 12px;margin-top:-2px;font-family:Consolas,"Courier New",monospace}
+    .sources .t{font-family:"Segoe UI",sans-serif;font-size:10.5px;font-weight:700;color:#8a94a8;
+        letter-spacing:.8px;text-transform:uppercase;margin-bottom:5px}
+    .srow{display:flex;gap:8px;align-items:baseline;padding:2px 6px;font-size:12.5px;color:#5a6478;border-radius:4px}
+    .srow i{font-style:normal;background:#8a94a8;color:#fff;border-radius:4px;min-width:17px;text-align:center;
+        font-size:10.5px;padding:1px 3px;flex:none}
+    .srow b{color:#39415a;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .srow b a{color:#1d4ed8;text-decoration:none}
+    .srow b a:hover{text-decoration:underline}
+    .srow.flash{animation:fl 1.4s}
+    @keyframes fl{0%,45%{background:#fff3bf}100%{background:transparent}}
     #f{display:flex;gap:8px;margin-top:10px}
-    #i{flex:1;padding:10px;border:1px solid #ccc;border-radius:6px}
+    #cls{padding:10px;border:1px solid #ccc;border-radius:6px;background:#fff;max-width:230px}
+    #i{flex:1;min-width:0;padding:10px;border:1px solid #ccc;border-radius:6px}
     button{padding:10px 18px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer}
+    button:disabled{opacity:.55;cursor:default}
+
+    /* ===== админ-вкладка ===== */
+    .acard{border:1px solid #dfe5f0;border-radius:10px;padding:10px 12px;background:#fafbfd}
+    .ahead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+    .ahead b{color:#33415e;font-size:.95em}
+    .sm{padding:5px 10px;font-size:.8em;background:#eef2fb;color:#1d4ed8;border:1px solid #8fb0f7;border-radius:6px}
+    .sm:hover{background:#e3edff}
+    .arow{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
+    .arow input{flex:1;min-width:230px;padding:9px 10px;border:1px solid #ccc;border-radius:6px}
+    button.gray{background:#64748b}
+    button.warn{background:#b45309}
+    .sb{display:inline-block;background:#fff;border:1px solid #d5dbe7;border-radius:8px;
+        padding:4px 10px;margin:2px 5px 2px 0;font-size:13px;color:#5a6478}
+    .sb b{font-size:14.5px}
+    .paused{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;border-radius:8px;
+        padding:8px 12px;margin-bottom:6px;font-size:14px}
+    .mono{font-family:Consolas,"Courier New",monospace;font-size:12.5px;color:#39415a;
+        white-space:pre-wrap;word-break:break-word}
+    .mono.ok{color:#15803d}
+    .mono.bad{color:#b91c1c}
+    .tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+    .tbl th{text-align:left;color:#8a94a8;font-weight:600;padding:4px 6px;border-bottom:1px solid #dfe5f0}
+    .tbl td{padding:4px 6px;border-bottom:1px solid #eef1f6;vertical-align:top;word-break:break-word}
+    .gw{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 </style></head><body>
-<h3>Чат по базе знаний</h3>
-<div id="chat"></div>
-<form id="f"><input id="i" placeholder="Спросите по документам…" autocomplete="off"><button>➤</button></form>
+<div id="top">
+    <h3>Чат по базе знаний <span class="ver">v4.0</span></h3>
+    <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
+</div>
+
+<div id="tabs">
+    <button type="button" class="tab on" id="tabChat">💬 Чат</button>
+    <button type="button" class="tab" id="tabAdmin">🛠 Админ-панель</button>
+</div>
+
+<!-- ==================== вкладка «Чат» ==================== -->
+<div id="viewChat">
+    <div id="chat"></div>
+    <form id="f">
+        <select id="cls" title="Признак документа"></select>
+        <input id="i" placeholder="Спросите по документам…" autocomplete="off"><button>➤</button>
+    </form>
+</div>
+
+<!-- ==================== вкладка «Админ» ==================== -->
+<div id="viewAdmin" hidden>
+
+    <div class="acard">
+        <div class="ahead"><b>Состояние индексации</b>
+            <button type="button" class="sm" id="btnStats">⟳ Обновить</button></div>
+        <div id="stats" class="mono">—</div>
+        <div class="arow">
+            <button type="button" class="gray" id="btnPause" title="ingest_paused=1 в rag_control, на все инстансы">⏸ Пауза индексации</button>
+            <button type="button" id="btnResume">▶ Продолжить</button>
+            <button type="button" class="warn" id="btnRebuild" title="Перезалить все векторы из MSSQL в ChromaDB">♻ Пересобрать индекс</button>
+        </div>
+        <div class="arow">
+            <input id="guid" placeholder="GUID документа для переиндексации" autocomplete="off">
+            <button type="button" id="btnReindex">↻ Переиндексировать</button>
+        </div>
+        <div id="actOut" class="mono"></div>
+    </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Самопроверки каналов</b></div>
+        <div class="arow">
+            <button type="button" id="btnSelf">Эмбеддер</button>
+            <button type="button" id="btnLlm" title="Ответ LLM может занять до пары минут">LLM</button>
+        </div>
+        <div id="selfOut" class="mono">Нажмите кнопку — результат появится здесь.</div>
+    </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Ошибки индексации (последние 20)</b>
+            <button type="button" class="sm" id="btnErr">⟳ Обновить</button></div>
+        <div id="errs"></div>
+    </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Проиндексированные файлы (последние 200)</b>
+            <button type="button" class="sm" id="btnFiles">⟳ Обновить</button></div>
+        <div id="files"></div>
+    </div>
+
+</div>
+
 <script>
+    console.info('RAG UI v4.0 — вкладка «Админ»: stats, selftest, LLM, ошибки, пауза, rebuild, reindex');
     const sid = localStorage.getItem('ragSid') || crypto.randomUUID();
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
-    function sources(el, srcs){
-        if (!srcs || !srcs.length) return;
-        const s = document.createElement('div'); s.className = 'src';
-        s.textContent = 'Источники: ' + srcs.map(x => `${x.fileName} #${x.chunkNo}`).join('; ');
-        el.appendChild(s);
+    const cls = document.getElementById('cls');
+
+    document.getElementById('newChat').onclick = () => {
+        if (!confirm('Начать новый диалог? Текущая история будет забыта.')) return;
+        localStorage.removeItem('ragSid');
+        location.reload();
+    };
+    /*-------блок загрузки классификаторов-------*/
+    const any = document.createElement('option');
+    any.value = ''; any.textContent = 'Все документы';
+    cls.appendChild(any);
+    (async () => {
+        try {
+            const r = await fetch('/api/rag/classifiers');
+            const list = await r.json();
+            for (const c of list) {
+                const o = document.createElement('option');
+                o.value = c.classifier;
+                o.textContent = c.classifier + ' (карточек: ' + (c.cards ?? '?')
+                    + ', файлов: ' + (c.files ?? '?') + ')';
+                o.title = o.textContent;   // длинная подпись целиком видна при наведении
+                cls.appendChild(o);
+            }
+        } catch (e) { console.warn('Классификаторы не загружены: ', e); }
+    })();
+
+    /* ---------- мини-markdown ---------- */
+    const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    function inline(s) {
+        s = esc(s);
+        s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+        s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
+        s = s.replace(/\[([^\]\n]{1,120})\]/g, '<span class="cite">[$1]</span>');
+        return s;
     }
+
+    function md(text) {
+        const lines = String(text || '')
+            .replace(/^Источники:.*/gim, '')
+            .split('\n');
+        let html = '', i = 0, buf = [];
+        const flush = () => { html += buf.length ? '<div class="p">' + buf.map(inline).join('<br>') + '</div>' : ''; buf = []; };
+        while (i < lines.length) {
+            const l = lines[i];
+            if (/^\s*```/.test(l)) {
+                flush(); i++; const code = [];
+                while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
+                i++; html += '<pre><code>' + esc(code.join('\n')) + '</code></pre>'; continue;
+            }
+            const h = l.match(/^\s*(#{1,4})\s+(.*)/);
+            if (h) { flush(); html += '<h4>' + inline(h[2]) + '</h4>'; i++; continue; }
+            if (/^\s*>\s?/.test(l)) {
+                flush();
+                const q = [];
+                while (i < lines.length && /^\s*>\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
+                html += '<blockquote>' + md(q.join('\n')) + '</blockquote>'; continue;
+            }
+            if (/^\s*([-*+])\s+/.test(l)) {
+                flush();
+                const it = [];
+                while (i < lines.length && /^\s*([-*+])\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*([-*+])\s+/, ''));
+                html += '<ul>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ul>'; continue;
+            }
+            if (/^\s*\d+[.)]\s+/.test(l)) {
+                flush();
+                const it = [];
+                while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ''));
+                html += '<ol>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ol>'; continue;
+            }
+            if (/^\s*-{3,}\s*$/.test(l)) { flush(); html += '<hr>'; i++; continue; }
+            if (!l.trim()) { flush(); i++; continue; }
+            buf.push(l); i++;
+        }
+        flush();          // фикс v3.4: без конкатенации с undefined
+        return html;
+    }
+
+    /* ---------- карточка источников ---------- */
+    function sourcesEl(srcs) {
+        const card = document.createElement('div'); card.className = 'sources';
+        const t = document.createElement('div'); t.className = 't'; t.textContent = 'Источники';
+        card.appendChild(t);
+        const seen = new Set();
+        srcs.forEach((x, n) => {
+            x = (x && typeof x === 'object') ? x : {};
+            const chunk = (x.chunkNo != null) ? x.chunkNo : '?';
+            const name  = (x.fileName != null && x.fileName !== '') ? String(x.fileName) : ('источник ' + (n + 1));
+            const key = String(x.documentGuid ?? '') + '#' + chunk;
+            if (seen.has(key)) return;
+            seen.add(key);
+            const row = document.createElement('div'); row.className = 'srow'; row.id = 'src-' + n;
+            const i = document.createElement('i'); i.textContent = n + 1;
+            const b = document.createElement('b'); b.title = name;
+            if (x.url) {
+                const a = document.createElement('a');
+                a.href = x.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                a.textContent = name;
+                b.appendChild(a);
+            } else {
+                b.textContent = name;
+            }
+            const s = document.createElement('span'); s.textContent = ' фрагм. ' + chunk;
+            row.append(i, b, s);
+            card.appendChild(row);
+        });
+        return card;
+    }
+
+    function linkCites(aEl, srcs) {
+        const norm = s => String(s ?? '').toLowerCase().replace(/\s+/g, '');
+        aEl.querySelectorAll('.cite').forEach(sp => {
+            const m = sp.textContent.match(/фрагмент[^\d]*(\d+)/i); if (!m) return;
+            const nm = (sp.textContent.match(/\[([^,\]]+)/) || [])[1] || '';
+            const key = norm(nm).slice(0, 10); if (key.length < 4) return;
+            const idx = srcs.findIndex(r => +r.chunkNo === +m[1] && norm(r.fileName).includes(key));
+            if (idx < 0) return;
+            sp.classList.add('linked');
+            sp.title = 'Источник ' + (idx + 1) + ': ' + (srcs[idx].fileName || '');
+            sp.onclick = () => {
+                const row = document.getElementById('src-' + idx);
+                if (!row) return;
+                row.scrollIntoView({block: 'center', behavior: 'smooth'});
+                row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+            };
+        });
+    }
+
+    /* ---------- отправка вопроса ---------- */
     document.getElementById('f').onsubmit = async e => {
         e.preventDefault();
         const inp = document.getElementById('i');
@@ -35,10 +292,183 @@
         box.scrollTop = box.scrollHeight;
         try {
             const r = await fetch('/api/rag/chat', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({sessionId: sid, message: q})});
-            const j = await r.json();
-            a.textContent = j.answer; sources(a, j.sources);
-        } catch (err) { a.textContent = 'Ошибка: ' + err; }
+                body: JSON.stringify({sessionId: sid, message: q, classifier: cls.value || null})});
+            const j = await r.json().catch(() => ({}));
+            const answerText = String(j && j.answer != null ? j.answer : '').trim();
+            if (!r.ok) {
+                a.textContent = '⚠ ' + (String(j.error || '') || 'Сервис ответил ошибкой ' + r.status);
+            } else if (!answerText) {
+                a.textContent = 'Не нашлось ответа по вашему вопросу. Попробуйте переформулировать '
+                    + 'или выбрать другой признак документа.';
+            } else {
+                a.innerHTML = md(answerText);
+                if (Array.isArray(j.sources) && j.sources.length) {
+                    try {
+                        box.appendChild(sourcesEl(j.sources));
+                        linkCites(a, j.sources);
+                    } catch (e) { console.warn('Источники не отрисованы (ответ показан полностью): ', e); }
+                }
+            }
+        } catch (err) {
+            a.textContent = '⚠ Сервис недоступен: ' + err.message;
+        }
         box.scrollTop = box.scrollHeight;
     };
+
+    /* ====================== вкладка «Админ» ====================== */
+    const $ = id => document.getElementById(id);
+    const tabChat = $('tabChat'), tabAdmin = $('tabAdmin');
+    const viewChat = $('viewChat'), viewAdmin = $('viewAdmin');
+    const actOut = $('actOut'), selfOut = $('selfOut');
+    let adminInit = false;
+
+    /* единый вызов API: всегда JSON, ошибки бэкенда — в исключение */
+    async function api(url, opts) {
+        const r = await fetch(url, opts);
+        let j = {};
+        try { j = await r.json(); } catch (e) { /* не JSON — ниже отразим статус */ }
+        if (!r.ok) throw new Error(String(j.error || ('HTTP ' + r.status)));
+        return j;
+    }
+    function out(s) { actOut.textContent = '[' + new Date().toLocaleTimeString('ru-RU') + '] ' + s; }
+
+    function showTab(admin) {
+        tabChat.classList.toggle('on', !admin);
+        tabAdmin.classList.toggle('on', admin);
+        viewChat.hidden = admin;
+        viewAdmin.hidden = !admin;
+        if (admin && !adminInit) { adminInit = true; loadStats(); loadErrors(); loadFiles(); }
+    }
+    tabChat.onclick = () => showTab(false);
+    tabAdmin.onclick = () => showTab(true);
+
+    /* ---- состояние (stats + paused + indexSize) ---- */
+    const ST = {N:['новые','#2563eb'], P:['в работе','#d97706'], I:['проиндексировано','#16a34a'],
+        D:['к удалению','#9333ea'], E:['ошибки','#dc2626'], X:['вычищено','#8a94a8']};
+    async function loadStats() {
+        const el = $('stats'); el.textContent = 'загружаю…';
+        try {
+            const j = await api('/api/rag/admin/stats');
+            let h = j.paused ? '<div class="paused">⏸ Индексация на паузе (rag_control: ingest_paused=1)</div>' : '';
+            for (const [k, v] of Object.entries(j)) {
+                if (k === 'paused') continue;
+                if (k === 'indexSize') {
+                    h += '<span class="sb" title="Векторов в ChromaDB">Chroma: <b style="color:#0f766e">'
+                        + (v < 0 ? 'недоступна' : v) + '</b></span>';
+                } else {
+                    const st = ST[k] || [k, '#64748b'];
+                    h += '<span class="sb">' + st[0] + ': <b style="color:' + st[1] + '">' + v + '</b></span>';
+                }
+            }
+            el.innerHTML = h;
+        } catch (e) { el.innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>'; }
+    }
+    $('btnStats').onclick = loadStats;
+
+    /* ---- пауза / продолжение ---- */
+    async function setPaused(pause) {
+        if (!confirm(pause ? 'Поставить индексацию на паузу? (действует на все инстансы)'
+            : 'Снять паузу и продолжить индексацию?')) return;
+        try {
+            const j = await api('/api/rag/admin/' + (pause ? 'pause' : 'resume'), {method: 'POST'});
+            out('✓ ' + (pause ? 'Пауза установлена' : 'Индексация возобновлена') + ' (result: ' + j.result + ')');
+        } catch (e) { out('⚠ ' + e.message); }
+        loadStats();
+    }
+    $('btnPause').onclick = () => setPaused(true);
+    $('btnResume').onclick = () => setPaused(false);
+
+    /* ---- пересборка индекса (тяжёлая: перезаливка всех векторов) ---- */
+    $('btnRebuild').onclick = async () => {
+        if (!confirm('Пересобрать индекс?\nПерезаливаются ВСЕ векторы из MSSQL в ChromaDB — это может занять минуты.')) return;
+        const b = $('btnRebuild'), t = b.textContent;
+        b.disabled = true; b.textContent = '♻ пересобираю…';
+        try {
+            const j = await api('/api/rag/admin/rebuild', {method: 'POST'});
+            out('✓ Индекс пересобран, векторов: ' + j.size);
+        } catch (e) { out('⚠ ' + e.message); }
+        b.disabled = false; b.textContent = t;
+        loadStats();
+    };
+
+    /* ---- переиндексация одного документа по GUID ---- */
+    $('btnReindex').onclick = async () => {
+        const g = $('guid').value.trim();
+        if (!g) { out('⚠ Вставьте GUID документа'); return; }
+        try {
+            const j = await api('/api/rag/admin/reindex/' + encodeURIComponent(g), {method: 'POST'});
+            $('guid').value = '';
+            out('✓ Документ поставлен в очередь на переиндексацию (result: ' + j.result + ')');
+        } catch (e) { out('⚠ ' + e.message); }
+        loadStats();
+    };
+
+    /* ---- самопроверки: эмбеддер и LLM ---- */
+    async function runSelf(path, label, btn) {
+        btn.disabled = true; const t = btn.textContent; btn.textContent = label + '…';
+        selfOut.innerHTML = '<div class="mono">' + esc(label) + ': проверяю…</div>';
+        try {
+            const j = await api(path);
+            if (j.ok) {
+                const lines = ['✓ ' + label + ': OK — ' + j.ms + ' мс'];
+                if (j.endpoint) lines.push('endpoint: ' + j.endpoint);
+                if (j.model) lines.push('модель: ' + j.model);
+                if (j.dims != null) lines.push('размерность: ' + j.dims);
+                if (j.answer) lines.push('ответ: ' + j.answer);
+                selfOut.innerHTML = '<div class="mono ok">' + esc(lines.join('\n')) + '</div>';
+            } else {
+                selfOut.innerHTML = '<div class="mono bad">✗ ' + esc(label) + ': FAIL — '
+                    + esc(String(j.error || '')) + (j.endpoint ? '\nendpoint: ' + esc(String(j.endpoint)) : '')
+                    + (j.model ? ' / модель: ' + esc(String(j.model)) : '') + '</div>';
+            }
+        } catch (e) {
+            selfOut.innerHTML = '<div class="mono bad">✗ ' + esc(e.message) + '</div>';
+        }
+        btn.disabled = false; btn.textContent = t;
+    }
+    $('btnSelf').onclick = e => runSelf('/api/rag/admin/selftest', 'Эмбеддер', e.target);
+    $('btnLlm').onclick = e => runSelf('/api/rag/admin/llm-selftest', 'LLM', e.target);
+
+    /* ---- последние ошибки индексации ---- */
+    async function loadErrors() {
+        const el = $('errs'); el.innerHTML = '<div class="mono">загружаю…</div>';
+        try {
+            const list = await api('/api/rag/admin/errors');
+            if (!Array.isArray(list) || !list.length) {
+                el.innerHTML = '<div class="mono ok">Ошибок нет ✓</div>'; return;
+            }
+            let h = '<table class="tbl"><tr><th>GUID</th><th>ретраи</th><th>ошибка</th><th>когда</th></tr>';
+            for (const r of list) {
+                h += '<tr><td class="mono"><span class="gw" title="' + esc(String(r.guid || '')) + '">'
+                    + esc(String(r.guid || '')) + '</span></td>'
+                    + '<td>' + Number(r.retries || 0) + '</td>'
+                    + '<td>' + esc(String(r.error || '')) + '</td>'
+                    + '<td class="mono">' + esc(String(r.at || '')) + '</td></tr>';
+            }
+            el.innerHTML = h + '</table>';
+        } catch (e) { el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>'; }
+    }
+    $('btnErr').onclick = loadErrors;
+
+    /* ---- проиндексированные файлы ---- */
+    async function loadFiles() {
+        const el = $('files'); el.innerHTML = '<div class="mono">загружаю…</div>';
+        try {
+            const list = await api('/api/rag/files');
+            if (!Array.isArray(list) || !list.length) {
+                el.innerHTML = '<div class="mono">Нет проиндексированных файлов</div>'; return;
+            }
+            let h = '<table class="tbl"><tr><th>файл</th><th>чанков</th><th>индексирован</th></tr>';
+            for (const r of list) {
+                h += '<tr><td>' + esc(String(r.fileName || '')) + '</td>'
+                    + '<td>' + Number(r.chunks || 0) + '</td>'
+                    + '<td class="mono">' + esc(String(r.indexedAt || '')) + '</td></tr>';
+            }
+            el.innerHTML = h + '</table>';
+        } catch (e) { el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>'; }
+    }
+    $('btnFiles').onclick = loadFiles;
+
+    /* лёгкий опрос состояния, пока открыта админ-вкладка */
+    setInterval(() => { if (!viewAdmin.hidden && !document.hidden) loadStats(); }, 20000);
 </script></body></html>

@@ -11,6 +11,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -99,7 +101,7 @@ public class IngestService {
             return newIds;
         });
 
-        publishVectors(oldIds, ids, vectors);              // ChromaDB; сбой → EmbeddingServiceException
+        publishVectors(oldIds, ref.guid(), ref.classifier(), ids, vectors);             // ChromaDB; сбой → EmbeddingServiceException
         refs.markIndexed(ref.guid(), hash);                // статус 'I' только после успеха
 
         log.info("Проиндексирован {} [{}] — {} чанков из {} файлов за {} мс",
@@ -150,11 +152,17 @@ public class IngestService {
         return fname != null && SKIP_FILES.stream().anyMatch(p -> p.matcher(fname).find());
     }
 
-    /** Запись векторов в Chroma; ошибка = "внешняя система недоступна" — не ретрай документа. */
-    private void publishVectors(List<Long> oldIds, List<Long> ids, List<float[]> vectors) {
+    /** Запись векторов в Chroma с метаданными документа; ошибка = внешняя система. */
+    private void publishVectors(List<Long> oldIds, UUID guid, String classifier,
+                                List<Long> ids, List<float[]> vectors) {
         try {
-            index.removeChunks(oldIds);                    // убрать старые векторы
-            index.addAll(ids, vectors);                    // добавить новые
+            index.removeChunks(oldIds);
+            List<Map<String, String>> metas = new ArrayList<>(ids.size());
+            for (int i = 0; i < ids.size(); i++) {
+                metas.add(Map.of("document_guid", guid.toString(),
+                        "classifier", classifier == null ? "" : classifier));
+            }
+            index.addAll(ids, vectors, metas);
         } catch (Exception e) {
             throw new EmbeddingServiceException("ChromaDB: " + e.getMessage(), e);
         }
