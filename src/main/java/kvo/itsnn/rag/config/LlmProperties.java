@@ -15,5 +15,8 @@ public record LlmProperties(
         @DefaultValue("6")     int contextChunks,
         @DefaultValue("24")    int candidateChunks,
         // true → vLLM: chat_template_kwargs.enable_thinking=false (Qwen3 не «думает», ответ в разы быстрее)
-        @DefaultValue("true")  boolean disableThinking) {
+        @DefaultValue("true")  boolean disableThinking,
+        // === D: сценарий «сравнение версий одного документа» ===
+        @DefaultValue("true")  boolean compareEnabled,
+        @DefaultValue("8")     int compareChunksPerSide) {
 }

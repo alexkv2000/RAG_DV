@@ -10,6 +10,7 @@
 
     /* ===== вкладки ===== */
     #tabs{display:flex;gap:6px;margin-top:12px}
+    #tabs[hidden]{display:none}         /* display:flex перебивает hidden — как у #viewAdmin */
     .tab{flex:1;padding:9px 10px;border:1px solid #c9d2e3;border-bottom:none;border-radius:8px 8px 0 0;
         background:#e4e9f4;color:#42506b;font-size:.95em}
     .tab.on{background:#fff;color:#14337a;font-weight:600;border-color:#dde}
@@ -87,7 +88,7 @@
     .gw{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 </style></head><body>
 <div id="top">
-    <h3>Чат по базе знаний <span class="ver">v4.0</span></h3>
+    <h3>Чат по базе знаний <span class="ver">v4.5</span></h3>
     <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
 </div>
 
@@ -112,9 +113,12 @@
         <div class="ahead"><b>Состояние индексации</b>
             <button type="button" class="sm" id="btnStats">⟳ Обновить</button></div>
         <div id="stats" class="mono">—</div>
+        <div id="nightly" class="mono" style="margin-top:6px"></div>
         <div class="arow">
             <button type="button" class="gray" id="btnPause" title="ingest_paused=1 в rag_control, на все инстансы">⏸ Пауза индексации</button>
             <button type="button" id="btnResume">▶ Продолжить</button>
+            <button type="button" class="gray" id="btnNightly"
+                    title="Сверка ChromaDB с резервом в MSSQL — то же, что ночная в 03:30. При расхождении перезаливает индекс (это может занять минуты)">🔍 Сверить сейчас</button>
             <button type="button" class="warn" id="btnRebuild" title="Перезалить все векторы из MSSQL в ChromaDB">♻ Пересобрать индекс</button>
         </div>
         <div class="arow">
@@ -122,6 +126,44 @@
             <button type="button" id="btnReindex">↻ Переиндексировать</button>
         </div>
         <div id="actOut" class="mono"></div>
+    </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Ночное окно индексации</b>
+            <button type="button" class="sm" id="btnNightRefresh">⟳ Обновить</button></div>
+        <div id="nightNow" class="mono">—</div>
+        <div class="arow">
+            <input id="nightStart" type="time" value="23:00" style="flex:none;min-width:0;width:110px" title="Начало ночного окна">
+            <span style="color:#8a94a8">–</span>
+            <input id="nightEnd" type="time" value="05:00" style="flex:none;min-width:0;width:110px" title="Конец ночного окна">
+            <button type="button" id="btnNightSave">💾 Сохранить</button>
+        </div>
+        <div class="mono" style="font-size:11.5px;color:#8a94a8">rag_control: night_start / night_end.
+            Применяется без рестарта, на все инстансы. Ночью — ночной batch, днём — дневной + лимит
+            (значения — в карточке «Скорость индексации»).</div>
+    </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Скорость индексации</b>
+            <button type="button" class="sm" id="btnSetRefresh">⟳ Обновить</button></div>
+        <div id="setNow" class="mono">—</div>
+        <div class="arow" style="gap:14px">
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Опрос, сек
+                <input id="setPoll" type="number" min="1" max="600"
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Batch день
+                <input id="setBatchDay" type="number" min="1" max="100"
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Batch ночь
+                <input id="setBatchNight" type="number" min="1" max="100"
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Лимит днём, карт/час
+                <input id="setHourLimit" type="number" min="1" max="10000"
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
+            <button type="button" id="btnSetSave" style="align-self:flex-end">💾 Сохранить</button>
+        </div>
+        <div class="mono" style="font-size:11.5px;color:#8a94a8">rag_control: poll_interval_sec / ingest_batch_day /
+            ingest_batch_night / day_hour_limit. Без рестарта; новый интервал опроса — с ближайшего тика.</div>
     </div>
 
     <div class="acard">
@@ -148,20 +190,27 @@
 </div>
 
 <script>
-    console.info('RAG UI v4.0 — вкладка «Админ»: stats, selftest, LLM, ошибки, пауза, rebuild, reindex');
+    console.info('RAG UI v4.5 — админ-вкладка открывается только ссылкой с ?adminPanel=1');
     const sid = localStorage.getItem('ragSid') || crypto.randomUUID();
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
     const cls = document.getElementById('cls');
 
+    /* админ-вкладка видна только при adminPanel=1 в адресе страницы:
+       http://host/            → чистый чат, полосы вкладок нет вовсе
+       http://host/?adminPanel=1  (или ...&adminPanel=1) → вкладки Чат/Админ как раньше */
+    const isAdmin = new URLSearchParams(location.search).get('adminPanel') === '1';
+    if (!isAdmin) document.getElementById('tabs').hidden = true;
+
     document.getElementById('newChat').onclick = () => {
         if (!confirm('Начать новый диалог? Текущая история будет забыта.')) return;
         localStorage.removeItem('ragSid');
-        location.reload();
+        location.reload();          // перезагрузка сохраняет adminPanel=1 в адресе — режим не теряется
     };
     /*-------блок загрузки классификаторов-------*/
     const any = document.createElement('option');
-    any.value = ''; any.textContent = 'Все документы';
+    any.value = '';
+    any.textContent = 'Все документы';
     cls.appendChild(any);
     (async () => {
         try {
@@ -175,11 +224,13 @@
                 o.title = o.textContent;   // длинная подпись целиком видна при наведении
                 cls.appendChild(o);
             }
-        } catch (e) { console.warn('Классификаторы не загружены: ', e); }
+        } catch (e) {
+            console.warn('Классификаторы не загружены: ', e);
+        }
     })();
 
     /* ---------- мини-markdown ---------- */
-    const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
     function inline(s) {
         s = esc(s);
@@ -195,37 +246,62 @@
             .replace(/^Источники:.*/gim, '')
             .split('\n');
         let html = '', i = 0, buf = [];
-        const flush = () => { html += buf.length ? '<div class="p">' + buf.map(inline).join('<br>') + '</div>' : ''; buf = []; };
+        const flush = () => {
+            html += buf.length ? '<div class="p">' + buf.map(inline).join('<br>') + '</div>' : '';
+            buf = [];
+        };
         while (i < lines.length) {
             const l = lines[i];
             if (/^\s*```/.test(l)) {
-                flush(); i++; const code = [];
+                flush();
+                i++;
+                const code = [];
                 while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
-                i++; html += '<pre><code>' + esc(code.join('\n')) + '</code></pre>'; continue;
+                i++;
+                html += '<pre><code>' + esc(code.join('\n')) + '</code></pre>';
+                continue;
             }
             const h = l.match(/^\s*(#{1,4})\s+(.*)/);
-            if (h) { flush(); html += '<h4>' + inline(h[2]) + '</h4>'; i++; continue; }
+            if (h) {
+                flush();
+                html += '<h4>' + inline(h[2]) + '</h4>';
+                i++;
+                continue;
+            }
             if (/^\s*>\s?/.test(l)) {
                 flush();
                 const q = [];
                 while (i < lines.length && /^\s*>\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
-                html += '<blockquote>' + md(q.join('\n')) + '</blockquote>'; continue;
+                html += '<blockquote>' + md(q.join('\n')) + '</blockquote>';
+                continue;
             }
             if (/^\s*([-*+])\s+/.test(l)) {
                 flush();
                 const it = [];
                 while (i < lines.length && /^\s*([-*+])\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*([-*+])\s+/, ''));
-                html += '<ul>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ul>'; continue;
+                html += '<ul>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ul>';
+                continue;
             }
             if (/^\s*\d+[.)]\s+/.test(l)) {
                 flush();
                 const it = [];
                 while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ''));
-                html += '<ol>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ol>'; continue;
+                html += '<ol>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ol>';
+                continue;
             }
-            if (/^\s*-{3,}\s*$/.test(l)) { flush(); html += '<hr>'; i++; continue; }
-            if (!l.trim()) { flush(); i++; continue; }
-            buf.push(l); i++;
+            if (/^\s*-{3,}\s*$/.test(l)) {
+                flush();
+                html += '<hr>';
+                i++;
+                continue;
+            }
+            if (!l.trim()) {
+                flush();
+                i++;
+                continue;
+            }
+            buf.push(l);
+            i++;
         }
         flush();          // фикс v3.4: без конкатенации с undefined
         return html;
@@ -233,29 +309,39 @@
 
     /* ---------- карточка источников ---------- */
     function sourcesEl(srcs) {
-        const card = document.createElement('div'); card.className = 'sources';
-        const t = document.createElement('div'); t.className = 't'; t.textContent = 'Источники';
+        const card = document.createElement('div');
+        card.className = 'sources';
+        const t = document.createElement('div');
+        t.className = 't';
+        t.textContent = 'Источники';
         card.appendChild(t);
         const seen = new Set();
         srcs.forEach((x, n) => {
             x = (x && typeof x === 'object') ? x : {};
             const chunk = (x.chunkNo != null) ? x.chunkNo : '?';
-            const name  = (x.fileName != null && x.fileName !== '') ? String(x.fileName) : ('источник ' + (n + 1));
+            const name = (x.fileName != null && x.fileName !== '') ? String(x.fileName) : ('источник ' + (n + 1));
             const key = String(x.documentGuid ?? '') + '#' + chunk;
             if (seen.has(key)) return;
             seen.add(key);
-            const row = document.createElement('div'); row.className = 'srow'; row.id = 'src-' + n;
-            const i = document.createElement('i'); i.textContent = n + 1;
-            const b = document.createElement('b'); b.title = name;
+            const row = document.createElement('div');
+            row.className = 'srow';
+            row.id = 'src-' + n;
+            const i = document.createElement('i');
+            i.textContent = n + 1;
+            const b = document.createElement('b');
+            b.title = name;
             if (x.url) {
                 const a = document.createElement('a');
-                a.href = x.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                a.href = x.url;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
                 a.textContent = name;
                 b.appendChild(a);
             } else {
                 b.textContent = name;
             }
-            const s = document.createElement('span'); s.textContent = ' фрагм. ' + chunk;
+            const s = document.createElement('span');
+            s.textContent = ' фрагм. ' + chunk;
             row.append(i, b, s);
             card.appendChild(row);
         });
@@ -265,9 +351,11 @@
     function linkCites(aEl, srcs) {
         const norm = s => String(s ?? '').toLowerCase().replace(/\s+/g, '');
         aEl.querySelectorAll('.cite').forEach(sp => {
-            const m = sp.textContent.match(/фрагмент[^\d]*(\d+)/i); if (!m) return;
+            const m = sp.textContent.match(/фрагмент[^\d]*(\d+)/i);
+            if (!m) return;
             const nm = (sp.textContent.match(/\[([^,\]]+)/) || [])[1] || '';
-            const key = norm(nm).slice(0, 10); if (key.length < 4) return;
+            const key = norm(nm).slice(0, 10);
+            if (key.length < 4) return;
             const idx = srcs.findIndex(r => +r.chunkNo === +m[1] && norm(r.fileName).includes(key));
             if (idx < 0) return;
             sp.classList.add('linked');
@@ -276,7 +364,9 @@
                 const row = document.getElementById('src-' + idx);
                 if (!row) return;
                 row.scrollIntoView({block: 'center', behavior: 'smooth'});
-                row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+                row.classList.remove('flash');
+                void row.offsetWidth;
+                row.classList.add('flash');
             };
         });
     }
@@ -285,14 +375,23 @@
     document.getElementById('f').onsubmit = async e => {
         e.preventDefault();
         const inp = document.getElementById('i');
-        const q = inp.value.trim(); if (!q) return;
+        const q = inp.value.trim();
+        if (!q) return;
         inp.value = '';
-        const u = document.createElement('div'); u.className = 'm u'; u.textContent = q; box.appendChild(u);
-        const a = document.createElement('div'); a.className = 'm a'; a.textContent = '…ищу в документах и думаю…'; box.appendChild(a);
+        const u = document.createElement('div');
+        u.className = 'm u';
+        u.textContent = q;
+        box.appendChild(u);
+        const a = document.createElement('div');
+        a.className = 'm a';
+        a.textContent = '…ищу в документах и думаю…';
+        box.appendChild(a);
         box.scrollTop = box.scrollHeight;
         try {
-            const r = await fetch('/api/rag/chat', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({sessionId: sid, message: q, classifier: cls.value || null})});
+            const r = await fetch('/api/rag/chat', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({sessionId: sid, message: q, classifier: cls.value || null})
+            });
             const j = await r.json().catch(() => ({}));
             const answerText = String(j && j.answer != null ? j.answer : '').trim();
             if (!r.ok) {
@@ -306,7 +405,9 @@
                     try {
                         box.appendChild(sourcesEl(j.sources));
                         linkCites(a, j.sources);
-                    } catch (e) { console.warn('Источники не отрисованы (ответ показан полностью): ', e); }
+                    } catch (e) {
+                        console.warn('Источники не отрисованы (ответ показан полностью): ', e);
+                    }
                 }
             }
         } catch (err) {
@@ -326,32 +427,44 @@
     async function api(url, opts) {
         const r = await fetch(url, opts);
         let j = {};
-        try { j = await r.json(); } catch (e) { /* не JSON — ниже отразим статус */ }
+        try {
+            j = await r.json();
+        } catch (e) { /* не JSON — ниже отразим статус */
+        }
         if (!r.ok) throw new Error(String(j.error || ('HTTP ' + r.status)));
         return j;
     }
-    function out(s) { actOut.textContent = '[' + new Date().toLocaleTimeString('ru-RU') + '] ' + s; }
+
+    function out(s) {
+        actOut.textContent = '[' + new Date().toLocaleTimeString('ru-RU') + '] ' + s;
+    }
 
     function showTab(admin) {
+        if (admin && !isAdmin) return;   // без adminPanel=1 админ недоступен и через консоль
         tabChat.classList.toggle('on', !admin);
         tabAdmin.classList.toggle('on', admin);
         viewChat.hidden = admin;
         viewAdmin.hidden = !admin;
-        if (admin && !adminInit) { adminInit = true; loadStats(); loadErrors(); loadFiles(); }
+        if (admin && !adminInit) { adminInit = true; loadStats(); loadErrors(); loadFiles(); loadNight(); loadSettings(); }
     }
+
     tabChat.onclick = () => showTab(false);
     tabAdmin.onclick = () => showTab(true);
 
-    /* ---- состояние (stats + paused + indexSize) ---- */
-    const ST = {N:['новые','#2563eb'], P:['в работе','#d97706'], I:['проиндексировано','#16a34a'],
-        D:['к удалению','#9333ea'], E:['ошибки','#dc2626'], X:['вычищено','#8a94a8']};
+    /* ---- состояние (stats + paused + indexSize + сверка embedding) ---- */
+    const ST = {
+        N: ['новые', '#2563eb'], P: ['в работе', '#d97706'], I: ['проиндексировано', '#16a34a'],
+        D: ['к удалению', '#9333ea'], E: ['ошибки', '#dc2626'], X: ['вычищено', '#8a94a8']
+    };
+
     async function loadStats() {
-        const el = $('stats'); el.textContent = 'загружаю…';
+        const el = $('stats');
+        el.textContent = 'загружаю…';
         try {
             const j = await api('/api/rag/admin/stats');
             let h = j.paused ? '<div class="paused">⏸ Индексация на паузе (rag_control: ingest_paused=1)</div>' : '';
             for (const [k, v] of Object.entries(j)) {
-                if (k === 'paused') continue;
+                if (k === 'paused' || k === 'nightly') continue;   // nightly рисуем отдельно ниже
                 if (k === 'indexSize') {
                     h += '<span class="sb" title="Векторов в ChromaDB">Chroma: <b style="color:#0f766e">'
                         + (v < 0 ? 'недоступна' : v) + '</b></span>';
@@ -361,8 +474,51 @@
                 }
             }
             el.innerHTML = h;
-        } catch (e) { el.innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>'; }
+            renderNightly(j.nightly);
+        } catch (e) {
+            el.innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
+        }
     }
+
+    /* ---- сверка embedding (ночь 03:30 или кнопка «Сверить сейчас»; rag_control: nightly_embedding) ---- */
+    function renderNightly(raw) {
+        const el = $('nightly');
+        if (!el) return;
+        if (!raw) {
+            el.innerHTML = '<span style="color:#8a94a8">Сверка embedding (ночью в 03:30 или кнопкой «Сверить сейчас»): ещё не выполнялась</span>';
+            return;
+        }
+        let n;
+        try {
+            n = JSON.parse(raw);
+        } catch (e) {
+            el.innerHTML = '<span class="mono bad">Сверка embedding: не разобрано — ' + esc(String(raw)) + '</span>';
+            return;
+        }
+        const when = n.at ? new Date(n.at).toLocaleString('ru-RU') : '?';
+        const num = v => (v == null || v < 0) ? '—' : Number(v).toLocaleString('ru-RU');
+        const dur = n.ms == null ? '' : n.ms >= 60000
+            ? (n.ms / 60000).toFixed(1).replace('.', ',') + ' мин'
+            : (n.ms / 1000).toFixed(1).replace('.', ',') + ' с';
+        let verdict, color = '#15803d';
+        if (n.result === 'ok') {
+            verdict = '✓ пройдена: Chroma = MSSQL = ' + num(n.chromaAfter) + ' векторов';
+        } else if (n.result === 'resynced') {
+            color = '#b45309';
+            verdict = '↻ было расхождение, индекс перезалит: Chroma ' + num(n.chromaBefore)
+                + ' → ' + num(n.chromaAfter) + ' (MSSQL ' + num(n.mssql) + ')';
+        } else if (n.result === 'diff') {
+            color = '#b91c1c';
+            verdict = '⚠ после перезаливки осталось расхождение: Chroma ' + num(n.chromaAfter)
+                + ' / MSSQL ' + num(n.mssql) + ' — в Chroma есть лишние векторы';
+        } else {
+            color = '#b91c1c';
+            verdict = '✗ ошибка: ' + esc(String(n.error || n.result || ''));
+        }
+        el.innerHTML = 'Последняя сверка embedding (' + when + '): '
+            + '<span style="color:' + color + '">' + verdict + '</span>' + (dur ? ' · ' + dur : '');
+    }
+
     $('btnStats').onclick = loadStats;
 
     /* ---- пауза / продолжение ---- */
@@ -372,9 +528,12 @@
         try {
             const j = await api('/api/rag/admin/' + (pause ? 'pause' : 'resume'), {method: 'POST'});
             out('✓ ' + (pause ? 'Пауза установлена' : 'Индексация возобновлена') + ' (result: ' + j.result + ')');
-        } catch (e) { out('⚠ ' + e.message); }
+        } catch (e) {
+            out('⚠ ' + e.message);
+        }
         loadStats();
     }
+
     $('btnPause').onclick = () => setPaused(true);
     $('btnResume').onclick = () => setPaused(false);
 
@@ -382,30 +541,128 @@
     $('btnRebuild').onclick = async () => {
         if (!confirm('Пересобрать индекс?\nПерезаливаются ВСЕ векторы из MSSQL в ChromaDB — это может занять минуты.')) return;
         const b = $('btnRebuild'), t = b.textContent;
-        b.disabled = true; b.textContent = '♻ пересобираю…';
+        b.disabled = true;
+        b.textContent = '♻ пересобираю…';
         try {
             const j = await api('/api/rag/admin/rebuild', {method: 'POST'});
             out('✓ Индекс пересобран, векторов: ' + j.size);
-        } catch (e) { out('⚠ ' + e.message); }
-        b.disabled = false; b.textContent = t;
+        } catch (e) {
+            out('⚠ ' + e.message);
+        }
+        b.disabled = false;
+        b.textContent = t;
         loadStats();
+    };
+
+    /* ---- ручная сверка Chroma↔MSSQL (та же, что ночная в 03:30) ---- */
+    $('btnNightly').onclick = async () => {
+        const b = $('btnNightly'), t = b.textContent;
+        b.disabled = true;
+        b.textContent = '🔍 сверяю…';
+        try {
+            const j = await api('/api/rag/admin/nightly-check', {method: 'POST'});
+            out(j.result === 'busy'
+                ? '⏳ Сверка уже выполняется (ночный прогон?) — результат появится по завершении'
+                : '✓ Сверка выполнена');
+            loadStats();   // обновит и бейджи, и строку «Последняя сверка» (renderNightly внутри)
+        } catch (e) {
+            out('⚠ ' + e.message);
+        }
+        b.disabled = false;
+        b.textContent = t;
     };
 
     /* ---- переиндексация одного документа по GUID ---- */
     $('btnReindex').onclick = async () => {
         const g = $('guid').value.trim();
-        if (!g) { out('⚠ Вставьте GUID документа'); return; }
+        if (!g) {
+            out('⚠ Вставьте GUID документа');
+            return;
+        }
         try {
             const j = await api('/api/rag/admin/reindex/' + encodeURIComponent(g), {method: 'POST'});
             $('guid').value = '';
             out('✓ Документ поставлен в очередь на переиндексацию (result: ' + j.result + ')');
-        } catch (e) { out('⚠ ' + e.message); }
+        } catch (e) {
+            out('⚠ ' + e.message);
+        }
         loadStats();
+    };
+
+    /* ---- ночное окно индексации (night_start / night_end в rag_control) ---- */
+    async function loadNight() {
+        const el = $('nightNow');
+        el.textContent = 'загружаю…';
+        try {
+            const j = await api('/api/rag/admin/night-window');
+            $('nightStart').value = j.nightStart || '';
+            $('nightEnd').value = j.nightEnd || '';
+            el.textContent = 'Действует: ' + j.nightStart + ' – ' + j.nightEnd
+                + (j.night ? ' (сейчас ночь — полная скорость)' : ' (сейчас день — дневной лимит)');
+        } catch (e) {
+            el.innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
+        }
+    }
+
+    $('btnNightRefresh').onclick = loadNight;
+    $('btnNightSave').onclick = async () => {
+        const b = $('btnNightSave');
+        b.disabled = true;
+        try {
+            const j = await api('/api/rag/admin/night-window', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({nightStart: $('nightStart').value, nightEnd: $('nightEnd').value})
+            });
+            out('✓ Ночное окно сохранено: ' + j.nightStart + ' – ' + j.nightEnd);
+            loadNight();
+        } catch (e) {
+            out('⚠ ' + e.message);
+        }
+        b.disabled = false;
+    };
+
+    /* ---- скорость индексации (rag_control) ---- */
+    async function loadSettings() {
+        const el = $('setNow');
+        el.textContent = 'загружаю…';
+        try {
+            const j = await api('/api/rag/admin/settings');
+            $('setPoll').value = j.pollIntervalSec;
+            $('setBatchDay').value = j.ingestBatchDay;
+            $('setBatchNight').value = j.ingestBatchNight;
+            $('setHourLimit').value = j.dayHourLimit;
+            el.textContent = 'Действует: опрос каждые ' + j.pollIntervalSec + ' с · batch день ' + j.ingestBatchDay
+                + ' · batch ночь ' + j.ingestBatchNight + ' · лимит ' + j.dayHourLimit + ' карт/час';
+        } catch (e) {
+            el.innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
+        }
+    }
+    $('btnSetRefresh').onclick = loadSettings;
+    $('btnSetSave').onclick = async () => {
+        const b = $('btnSetSave');
+        b.disabled = true;
+        try {
+            const j = await api('/api/rag/admin/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({pollIntervalSec: +$('setPoll').value, ingestBatchDay: +$('setBatchDay').value,
+                    ingestBatchNight: +$('setBatchNight').value, dayHourLimit: +$('setHourLimit').value})
+            });
+            out('✓ Сохранено: опрос ' + j.pollIntervalSec + ' с, batch ' + j.ingestBatchDay + '/'
+                + j.ingestBatchNight + ', лимит ' + j.dayHourLimit + '/час');
+            loadSettings();
+        } catch (e) {
+            out('⚠ ' + e.message);
+        }
+        b.disabled = false;
     };
 
     /* ---- самопроверки: эмбеддер и LLM ---- */
     async function runSelf(path, label, btn) {
-        btn.disabled = true; const t = btn.textContent; btn.textContent = label + '…';
+        btn.disabled = true;
+        const t = btn.textContent;
+        btn.textContent = label + '…';
         selfOut.innerHTML = '<div class="mono">' + esc(label) + ': проверяю…</div>';
         try {
             const j = await api(path);
@@ -424,18 +681,22 @@
         } catch (e) {
             selfOut.innerHTML = '<div class="mono bad">✗ ' + esc(e.message) + '</div>';
         }
-        btn.disabled = false; btn.textContent = t;
+        btn.disabled = false;
+        btn.textContent = t;
     }
+
     $('btnSelf').onclick = e => runSelf('/api/rag/admin/selftest', 'Эмбеддер', e.target);
     $('btnLlm').onclick = e => runSelf('/api/rag/admin/llm-selftest', 'LLM', e.target);
 
     /* ---- последние ошибки индексации ---- */
     async function loadErrors() {
-        const el = $('errs'); el.innerHTML = '<div class="mono">загружаю…</div>';
+        const el = $('errs');
+        el.innerHTML = '<div class="mono">загружаю…</div>';
         try {
             const list = await api('/api/rag/admin/errors');
             if (!Array.isArray(list) || !list.length) {
-                el.innerHTML = '<div class="mono ok">Ошибок нет ✓</div>'; return;
+                el.innerHTML = '<div class="mono ok">Ошибок нет ✓</div>';
+                return;
             }
             let h = '<table class="tbl"><tr><th>GUID</th><th>ретраи</th><th>ошибка</th><th>когда</th></tr>';
             for (const r of list) {
@@ -446,17 +707,22 @@
                     + '<td class="mono">' + esc(String(r.at || '')) + '</td></tr>';
             }
             el.innerHTML = h + '</table>';
-        } catch (e) { el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>'; }
+        } catch (e) {
+            el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
+        }
     }
+
     $('btnErr').onclick = loadErrors;
 
     /* ---- проиндексированные файлы ---- */
     async function loadFiles() {
-        const el = $('files'); el.innerHTML = '<div class="mono">загружаю…</div>';
+        const el = $('files');
+        el.innerHTML = '<div class="mono">загружаю…</div>';
         try {
             const list = await api('/api/rag/files');
             if (!Array.isArray(list) || !list.length) {
-                el.innerHTML = '<div class="mono">Нет проиндексированных файлов</div>'; return;
+                el.innerHTML = '<div class="mono">Нет проиндексированных файлов</div>';
+                return;
             }
             let h = '<table class="tbl"><tr><th>файл</th><th>чанков</th><th>индексирован</th></tr>';
             for (const r of list) {
@@ -465,10 +731,17 @@
                     + '<td class="mono">' + esc(String(r.indexedAt || '')) + '</td></tr>';
             }
             el.innerHTML = h + '</table>';
-        } catch (e) { el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>'; }
+        } catch (e) {
+            el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
+        }
     }
+
     $('btnFiles').onclick = loadFiles;
 
     /* лёгкий опрос состояния, пока открыта админ-вкладка */
-    setInterval(() => { if (!viewAdmin.hidden && !document.hidden) loadStats(); }, 20000);
-</script></body></html>
+    setInterval(() => {
+        if (!viewAdmin.hidden && !document.hidden) loadStats();
+    }, 20000);
+</script>
+</body>
+</html>

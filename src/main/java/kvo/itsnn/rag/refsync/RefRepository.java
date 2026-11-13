@@ -3,7 +3,7 @@ package kvo.itsnn.rag.refsync;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
-
+import java.time.LocalTime;
 import java.util.*;
 
 @Repository
@@ -13,6 +13,90 @@ public class RefRepository {
 
     public RefRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+    public static final String NIGHT_START_KEY = "night_start";
+    public static final String NIGHT_END_KEY = "night_end";
+
+    public static final String INGEST_BATCH_DAY_KEY = "ingest_batch_day";
+    public static final String INGEST_BATCH_NIGHT_KEY = "ingest_batch_night";
+    public static final String DAY_HOUR_LIMIT_KEY = "day_hour_limit";
+    public static final String POLL_INTERVAL_KEY = "poll_interval_sec";
+
+    /** Общий для всех инстансов выключатель индексации. */
+    public static final String INGEST_PAUSED_KEY = "ingest_paused";
+
+    /** Ключ rag_control: результат последней ночной сверки embedding (JSON). */
+    public static final String NIGHTLY_KEY = "nightly_embedding";
+
+    /** Значение из rag_control по ключу; null — строки нет / значение пустое / БД недоступна. */
+    private String ctrlRaw(String key) {
+        try {
+            List<String> v = jdbc.queryForList(
+                    "SELECT ctrl_value FROM dbo.rag_control WHERE ctrl_key = ?", String.class, key);
+            if (v.isEmpty()) return null;
+            String raw = v.getFirst();
+            return raw == null || raw.isBlank() ? null : raw.strip();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Целочисленная настройка из rag_control; пусто/битое/БД недоступна → fallback. */
+    public int ctrlInt(String key, int fallback) {
+        String raw = ctrlRaw(key);
+        if (raw == null) return fallback;
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    public void setCtrlInt(String key, int value) {
+        upsertCtrl(key, Integer.toString(value));
+    }
+
+    /** Засев из дефолтов кода при первом старте; существующее не трогает. */
+    public void seedCtrlInt(String key, int value) {
+        seedCtrl(key, Integer.toString(value));
+    }
+
+    /** Эффективное значение из rag_control; пусто/битое → fallback (значение из yaml). */
+    public LocalTime ctrlTime(String key, LocalTime fallback) {
+        String raw = ctrlRaw(key);
+        if (raw == null) return fallback;
+        try {
+            return LocalTime.parse(raw);
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    public void setNightWindow(LocalTime start, LocalTime end) {
+        upsertCtrl(NIGHT_START_KEY, start.toString());
+        upsertCtrl(NIGHT_END_KEY, end.toString());
+    }
+
+    /** Засев из yaml при первом старте; существующее значение не трогает. */
+    public void seedCtrlTime(String key, LocalTime value) {
+        seedCtrl(key, value.toString());
+    }
+
+    private void seedCtrl(String key, String value) {
+        jdbc.update("""
+                INSERT INTO dbo.rag_control (ctrl_key, ctrl_value)
+                SELECT ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM dbo.rag_control WHERE ctrl_key = ?)
+                """, key, value, key);
+    }
+
+    private void upsertCtrl(String key, String value) {
+        jdbc.update("""
+                MERGE dbo.rag_control WITH (HOLDLOCK) AS t
+                USING (SELECT ? AS k) AS s ON t.ctrl_key = s.k
+                WHEN MATCHED THEN UPDATE SET t.ctrl_value = ?
+                WHEN NOT MATCHED THEN INSERT (ctrl_key, ctrl_value) VALUES (s.k, ?);
+                """, key, value, value);
     }
 
     /**
@@ -120,14 +204,12 @@ public class RefRepository {
      * Общий для всех инстансов выключатель индексации (dbo.rag_control).
      */
     public boolean ingestPaused() {
-        List<String> v = jdbc.queryForList(
-                "SELECT ctrl_value FROM dbo.rag_control WHERE ctrl_key='ingest_paused'", String.class);
-        return !v.isEmpty() && "1".equals(v.get(0));
+        return "1".equals(ctrlRaw(INGEST_PAUSED_KEY));
     }
 
     public void setPaused(boolean paused) {
-        jdbc.update("UPDATE dbo.rag_control SET ctrl_value=? WHERE ctrl_key='ingest_paused'",
-                paused ? "1" : "0");
+        jdbc.update("UPDATE dbo.rag_control SET ctrl_value=? WHERE ctrl_key=?",
+                paused ? "1" : "0", INGEST_PAUSED_KEY);
     }
 
     /**
@@ -141,5 +223,15 @@ public class RefRepository {
                 WHERE e.model = ? AND r.status = 'I'
                 """, Integer.class, model);
         return n == null ? 0 : n;
+    }
+
+    /** Upsert результата сверки; MERGE+HOLDLOCK — атомарно даже при двух инстансах. */
+    public void saveNightlyCheck(String json) {
+        upsertCtrl(NIGHTLY_KEY, json);
+    }
+
+    /** Последний записанный результат; null — сверка ещё не выполнялась. */
+    public String loadNightlyCheck() {
+        return ctrlRaw(NIGHTLY_KEY);
     }
 }

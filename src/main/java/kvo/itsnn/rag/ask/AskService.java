@@ -21,6 +21,9 @@ public class AskService {
     private static final Logger log = LoggerFactory.getLogger(AskService.class);
     private static final int MAX_CHUNK_CHARS = 1200;
     private static final int MAX_CONTEXT_CHARS = 15_000;
+    /** До стольких чанков на один документ: сравнительные вопросы («чем в.6 отличается от в.4»)
+     *  и вопросы по конкретному документу требуют несколько фрагментов из одного файла. */
+    private static final int MAX_CHUNKS_PER_DOC = 3;
 
     private final LlmProperties cfg;
     private final RagProperties props;      // queryPrefix для эмбеддинга запроса
@@ -29,10 +32,11 @@ public class AskService {
     private final JdbcTemplate jdbc;
     private final LlmClient llm;
     private final SystemPromptProvider prompts;   // system-промпт из rag_control
+    private final CompareService compare;         // D: сценарий «сравнение версий»
 
     public AskService(LlmProperties cfg, RagProperties props, Embedder embedder,
                       VectorIndex index, JdbcTemplate jdbc, LlmClient llm,
-                      SystemPromptProvider prompts) {
+                      SystemPromptProvider prompts, CompareService compare) {
         this.cfg = cfg;
         this.props = props;
         this.embedder = embedder;
@@ -40,6 +44,7 @@ public class AskService {
         this.jdbc = jdbc;
         this.llm = llm;
         this.prompts = prompts;
+        this.compare = compare;
         log.info("AskService: candidateChunks={}, contextChunks={}, queryPrefix='{}'",
                 cfg.candidateChunks(), cfg.contextChunks(), props.embedding().queryPrefix());
     }
@@ -61,6 +66,10 @@ public class AskService {
     }
 
     public AskResult ask(String query, String classifier, List<LlmClient.Message> history) {
+        // D: вопрос-сравнение версий идёт отдельным сценарием; не сработал детектор — обычный путь
+        Optional<AskResult> cmp = compare.tryCompare(query, classifier);
+        if (cmp.isPresent()) return cmp.get();
+
         List<ChunkHit> best = retrieve(query, classifier);
         if (best.isEmpty()) {
             log.warn("RAG: retrieve пустой для '{}'", query);
@@ -103,7 +112,7 @@ public class AskService {
 
     /**
      * Как в SearchController: вектор запроса (с query-префиксом e5) → Chroma →
-     * тексты чанков из MSSQL → дедуп по документу → первые contextChunks.
+     * тексты чанков из MSSQL → дедуп по документу (до 3 чанков) → первые contextChunks.
      * row_id в rag_embedding нет (там только chunk_id/model/dim/embedding) —
      * GUID для ссылки DocsVision берём прямо из rag_chunk.document_guid.
      */
@@ -132,9 +141,10 @@ public class AskService {
         log.info("retrieve: строк из MSSQL={}", ordered.size());
         ordered.sort(Comparator.comparingDouble(ChunkHit::score).reversed());   // порядок Chroma, а не SQL
         List<ChunkHit> out = new ArrayList<>(cfg.contextChunks());
-        Set<String> seenDocs = new HashSet<>();
+        Map<String, Integer> perDoc = new HashMap<>();          // B: до MAX_CHUNKS_PER_DOC чанков на документ
         for (ChunkHit h : ordered) {
-            if (seenDocs.add(h.documentGuid())) out.add(h);   // один документ = один лучший чанк
+            int n = perDoc.merge(h.documentGuid(), 1, Integer::sum);
+            if (n <= MAX_CHUNKS_PER_DOC) out.add(h);
             if (out.size() == cfg.contextChunks()) break;
         }
         log.info("retrieve: после дедупа={}", out.size());
