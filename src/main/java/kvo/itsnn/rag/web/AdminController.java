@@ -123,7 +123,15 @@ public class AdminController {
 
     @PostMapping("/rebuild")
     public Map<String, String> rebuild() {
-        index.reload();                // пересинхронизация Chroma из резервной копии в MSSQL
+        // пауза на время пересборки: переиндексация документа во время reload
+        // может вернуть в Chroma только что удалённые id (снова diff)
+        boolean wasPaused = refs.ingestPaused();
+        if (!wasPaused) refs.setPaused(true);
+        try {
+            index.reload();            // пересинхронизация Chroma из резервной копии в MSSQL
+        } finally {
+            if (!wasPaused) refs.setPaused(false);
+        }
         return Map.of(RESULT, "resynced", "size", String.valueOf(index.size()));
     }
     /** Ручная сверка Chroma↔MSSQL — то же, что ночная в 03:30.

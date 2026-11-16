@@ -31,7 +31,9 @@ public class IngestService {
     private final TransactionTemplate tx;
     private final RagProperties props;
 
-    /** Машиночитаемые конверты: семантики в них нет, шум в выдаче — пропускаем целиком. */
+    /**
+     * Машиночитаемые конверты: семантики в них нет, шум в выдаче — пропускаем целиком.
+     */
     private static final List<Pattern> SKIP_FILES = List.of(
             Pattern.compile("^ON_[A-Z]+_.*\\.xml$", Pattern.CASE_INSENSITIVE),       // форматы ФНС (ЭДО)
             Pattern.compile("^MessageSourceXml\\.xml$", Pattern.CASE_INSENSITIVE));  // конверт обмена Directum
@@ -65,8 +67,10 @@ public class IngestService {
         }
     }
 
-    /** Основной сценарий; вынесен из processOne, чтобы try-catch не вкладывались
-     *  и когнитивная сложность метода оставалась низкой. */
+    /**
+     * Основной сценарий; вынесен из processOne, чтобы try-catch не вкладывались
+     * и когнитивная сложность метода оставалась низкой.
+     */
     private void process(DocumentRef ref, long t0) {
         var files = contentLoader.load(ref.guid());
         List<Long> oldIds = refs.chunkIdsOf(ref.guid());   // старые чанки ДО замены
@@ -109,14 +113,22 @@ public class IngestService {
                 System.currentTimeMillis() - t0);
     }
 
-    /** Контента нет (или только машинные конверты) — очищаем чанки и фиксируем «пусто». */
+    /**
+     * Контента нет (или только машинные конверты) — очищаем чанки и фиксируем «пусто».
+     */
     private void markEmpty(DocumentRef ref, List<Long> oldIds) {
         refs.deleteChunks(ref.guid());
-        index.removeChunks(oldIds);
+        try {
+            index.removeChunks(oldIds);
+        } catch (Exception e) {
+            log.warn("Chroma: векторы {} не удалены ({}) — вычистит ночная сверка", ref.guid(), e.getMessage());
+        }
         refs.markIndexed(ref.guid(), Sha256.of(""));
     }
 
-    /** Пустой набор чанков допустим только если все файлы — машинные конверты. */
+    /**
+     * Пустой набор чанков допустим только если все файлы — машинные конверты.
+     */
     private static void requireText(List<ContentLoader.LoadedFile> files) {
         if (!files.stream().allMatch(f -> isMachineEnvelope(f.fileName()))) {
             throw new IllegalStateException("ни один файл не дал текст (сканы без OCR?)");
@@ -134,7 +146,9 @@ public class IngestService {
         return parts;
     }
 
-    /** Извлечение и чанкование одного файла; сбой одного файла не валит документ целиком. */
+    /**
+     * Извлечение и чанкование одного файла; сбой одного файла не валит документ целиком.
+     */
     private List<ChunkPart> safeExtract(DocumentRef ref, ContentLoader.LoadedFile f) {
         try {
             List<ChunkPart> parts = new ArrayList<>();
@@ -152,7 +166,9 @@ public class IngestService {
         return fname != null && SKIP_FILES.stream().anyMatch(p -> p.matcher(fname).find());
     }
 
-    /** Запись векторов в Chroma с метаданными документа; ошибка = внешняя система. */
+    /**
+     * Запись векторов в Chroma с метаданными документа; ошибка = внешняя система.
+     */
     private void publishVectors(List<Long> oldIds, UUID guid, String classifier,
                                 List<Long> ids, List<float[]> vectors) {
         try {
@@ -164,6 +180,13 @@ public class IngestService {
             }
             index.addAll(ids, vectors, metas);
         } catch (Exception e) {
+            // MSSQL уже переключился на новые chunk_id; старые удалены из MSSQL,
+            // их векторы в Chroma — сироты. Убираем best-effort; не вышло — вычистит ночная сверка.
+            try {
+                index.removeChunks(oldIds);
+            } catch (Exception sup) {
+                log.warn("{}: сиротные векторы не вычищены ({}) — ждём ночную сверку", guid, sup.getMessage());
+            }
             throw new EmbeddingServiceException("ChromaDB: " + e.getMessage(), e);
         }
     }
@@ -172,8 +195,10 @@ public class IngestService {
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
-    /** Текст для вектора: имя файла несёт реквизиты (номера, даты, «Список VIN...») —
-     *  добавляем его к каждому чанку. rag_chunk.content и content_hash — исходный текст. */
+    /**
+     * Текст для вектора: имя файла несёт реквизиты (номера, даты, «Список VIN...») —
+     * добавляем его к каждому чанку. rag_chunk.content и content_hash — исходный текст.
+     */
     private static String embedInput(String fileName, String text) {
         String name = fileName == null ? "" : fileName.strip();
         if (name.length() > 100) {

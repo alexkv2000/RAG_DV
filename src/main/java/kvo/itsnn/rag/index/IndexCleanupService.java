@@ -25,7 +25,14 @@ public class IndexCleanupService {
             if (!refs.markPurged(guid)) continue;      // успел вернуться — пропускаем
             List<Long> chunkIds = refs.chunkIdsOf(guid);   // id берём ДО удаления из MSSQL
             refs.deleteChunks(guid);
-            index.removeChunks(chunkIds);              // векторы убираем из Chroma
+            try {
+                index.removeChunks(chunkIds);          // векторы убираем из Chroma
+            } catch (Exception e) {
+                // один сбой Chroma не должен обрывать весь тик и оставлять векторы навсегда:
+                // документ уже X, к нему не вернёмся — сирот добьёт ночная сверка (reload со сносом)
+                log.warn("Chroma: векторы {} не удалены ({}) — вычистит ночная сверка",
+                        guid, e.getMessage());
+            }
         }
         log.info("Вычищено {} удалённых документов", deleted.size());
     }

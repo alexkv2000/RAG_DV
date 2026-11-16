@@ -119,7 +119,8 @@ public class RagScheduler implements SchedulingConfigurer {
 
     /** Сверка Chroma с резервной копией в MSSQL; перезаливка только при расхождении.
      *  Результат — в rag_control (nightly_embedding), админ-панель берёт его из /stats.
-     *  Оба инстанса сверяются независимо: двойной reload безвреден (upsert идемпотентен). */
+     *  Оба инстанса сверяются независимо: двойной reload сходится (upsert идемпотентен),
+     *  а сосед со старым кэшем id коллекции восстановится сам (404 → пересоздание). */
     @Scheduled(cron = "0 30 3 * * *")
     public boolean nightlyConsistency() {
         if (!checkBusy.compareAndSet(false, true)) return false;
@@ -133,8 +134,18 @@ public class RagScheduler implements SchedulingConfigurer {
                 return true;
             }
             log.warn("Ночная сверка: Chroma={}, MSSQL={} — пересинхронизация", chroma, mssql);
-            index.reload();
-            int after = index.size();
+            // 03:30 — внутри ночного окна (23:00–05:00): ingest работает на полной скорости,
+            // и его переиндексации конкурировали бы с reload (вернули бы только что удалённые
+            // id) — гасим ingest на время заливки
+            boolean wasPaused = refs.ingestPaused();
+            if (!wasPaused) refs.setPaused(true);
+            int after;
+            try {
+                index.reload();
+            } finally {
+                if (!wasPaused) refs.setPaused(false);
+            }
+            after = index.size();
             saveNightly(after == mssql ? "resynced" : "diff", chroma, after, mssql, t0, null);
         } catch (Exception e) {
             log.error("Ночная сверка не удалась: {}", e.getMessage());
