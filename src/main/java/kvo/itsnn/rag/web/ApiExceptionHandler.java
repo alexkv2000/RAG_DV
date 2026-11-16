@@ -9,6 +9,8 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 
 import java.util.Map;
 
@@ -60,5 +62,21 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, String>> unreadable(HttpMessageNotReadableException e) {
         return ResponseEntity.badRequest()
                 .body(Map.of(ERROR, "некорректное тело запроса: ожидается JSON {\"query\": \"...\"}"));
+    }
+
+    /** Прикреплённый файл больше лимита multipart (spring.servlet.multipart.max-file-size). */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, String>> tooBig(MaxUploadSizeExceededException e) {
+        log.warn("Файл больше лимита multipart: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(Map.of(ERROR, "файл слишком большой (лимит задан в spring.servlet.multipart.max-file-size)"));
+    }
+
+    /** Прочие проблемы multipart (битая кодировка, обрыв загрузки). */
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<Map<String, String>> multipart(MultipartException e) {
+        log.warn("Multipart сбой: {}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(Map.of(ERROR, "некорректный multipart-запрос: " + e.getMessage()));
     }
 }

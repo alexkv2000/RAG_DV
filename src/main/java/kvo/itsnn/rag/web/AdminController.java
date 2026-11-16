@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.*;
 import kvo.itsnn.rag.index.VectorIndex;
 import kvo.itsnn.rag.ask.DirectChatPromptProvider;
 
+import kvo.itsnn.rag.extract.ExtractPromptProvider;
+
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
 import java.util.*;
@@ -27,6 +29,8 @@ public class AdminController {
     private static final String MODEL = "model";
     private static final String ENDPOINT = "endpoint";
     private static final String MS = "ms";
+    private static final tools.jackson.databind.ObjectMapper JSON =
+            tools.jackson.databind.json.JsonMapper.builder().build();
 
     /** Вкладка «Промты»: редактируемые system-промпты (ключ rag_control → подпись). */
     private record PromptDef(String key, String title) {}
@@ -34,7 +38,9 @@ public class AdminController {
             new PromptDef(SystemPromptProvider.CTRL_KEY, "Системный — обычные вопросы"),
             new PromptDef(ComparePromptProvider.CTRL_KEY, "Сравнение — отличия версий"),
             new PromptDef(DocSummaryService.CTRL_KEY, "Суммарный — краткое содержание"),
-            new PromptDef(DirectChatPromptProvider.CTRL_KEY, "Свободный чат — без базы знаний"));
+            new PromptDef(DirectChatPromptProvider.CTRL_KEY, "Свободный чат — без базы знаний"),
+            new PromptDef(ExtractPromptProvider.CTRL_KEY_PROMPT, "Извлечение — промпт (файл → JSON)"),
+            new PromptDef(ExtractPromptProvider.CTRL_KEY_SCHEMA, "Извлечение — JSON-структура"));
 
     private final RefRepository refs;
     private final VectorIndex index;
@@ -194,9 +200,17 @@ public class AdminController {
     /** Сохранение промпта; применяется к следующему вопросу без рестарта. */
     @PostMapping("/prompts")
     public Map<String, Object> savePrompt(@RequestBody PromptRequest req) {
-        titleOf(req.key());                                // проверит ключ, бросит 400
+        titleOf(req.key());
         String value = req.value() == null ? "" : req.value();
         if (value.isBlank()) throw new IllegalArgumentException("промпт пустой — используйте «Дефолт из кода»");
+        if (ExtractPromptProvider.CTRL_KEY_SCHEMA.equals(req.key())) {   // схема обязана быть валидным JSON-объектом
+            try {
+                JSON.readValue(value, Map.class);
+            } catch (Exception e) {
+                throw new IllegalArgumentException(
+                        "JSON-структура — не валидный JSON-объект: " + e.getMessage());
+            }
+        }
         jdbc.update("""
                 MERGE dbo.rag_control WITH (HOLDLOCK) AS t
                 USING (SELECT ? AS k) AS s ON t.ctrl_key = s.k

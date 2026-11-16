@@ -197,6 +197,22 @@
     </div>
 
     <div class="acard">
+        <div class="ahead"><b>Извлечение реквизитов (файл → JSON)</b>
+            <button type="button" class="sm" id="btnExtRefresh">⟳ Обновить</button></div>
+        <div class="mono" style="font-size:11px;color:#8a94a8;margin-bottom:4px">Текущая схема
+            (rag_control: extract_json_schema; правка — вкладка «Промты»):</div>
+        <div id="extFields">—</div>
+        <div class="arow">
+            <input type="file" id="extFile" accept=".doc,.docx,.pdf,.rtf,.txt"
+                   style="flex:1;min-width:230px;padding:7px;border:1px solid #ccc;border-radius:6px;background:#fff">
+            <button type="button" id="btnExtract"
+                    title="POST /api/rag/extract — текст файла (скан → OCR) → LLM → JSON по схеме">📤 Извлечь</button>
+        </div>
+        <div id="extOut" class="mono">Выберите файл (doc, docx, pdf, rtf, txt; лимит 32 МБ) и нажмите «Извлечь».
+            Ответ LLM может идти до пары минут.</div>
+    </div>
+
+    <div class="acard">
         <div class="ahead"><b>Ошибки индексации (последние 20)</b>
             <button type="button" class="sm" id="btnErr">⟳ Обновить</button></div>
         <div id="errs"></div>
@@ -217,15 +233,26 @@
             System-промпты лежат в dbo.rag_control и читаются перед КАЖДЫМ вопросом — изменения
             применяются сразу, без рестарта, на все инстансы. «Дефолт из кода» удаляет строку из
             таблицы: работает DEFAULT, зашитый в Java-классе (после рестарта он же просеется в БД).
-            Ключи: ask_system_prompt · compare_system_prompt · summary_system_prompt
-            · direct_chat_system_prompt (свободный чат).
+            Ключи: ask_system_prompt · compare_system_prompt · summary_system_prompt · direct_chat_system_prompt (свободный чат) · extract_system_prompt / extract_json_schema (интеграция: файл → JSON; в схеме ключ — имя поля, значение — подсказка модели, может быть пустым).
         </div>
     </div>
     <div id="promptsList"></div>
+    <div class="acard">
+        <div class="ahead"><b>Проверка извлечения на файле</b></div>
+        <div class="mono" style="font-size:11.5px;color:#8a94a8">Сохранили схему или промпт выше —
+            проверьте на реальном файле. Схема и промпт читаются из БД перед каждым файлом, рестарт не нужен.
+            Интеграторам: тот же endpoint — POST /api/rag/extract, поле 'file'.</div>
+        <div class="arow">
+            <input type="file" id="extFileP" accept=".doc,.docx,.pdf,.rtf,.txt"
+                   style="flex:1;min-width:230px;padding:7px;border:1px solid #ccc;border-radius:6px;background:#fff">
+            <button type="button" id="btnExtractP">📤 Извлечь</button>
+        </div>
+        <div id="extOutP" class="mono">Файл → /api/rag/extract → JSON по схеме из карточки выше.</div>
+    </div>
 </div>
 
 <script>
-    console.info('RAG UI v4.6 — админ-панель и промты открываются только ссылкой с ?adminPanel=1');
+    console.info('RAG UI v4.7 — админ-панель и промты открываются только ссылкой с ?adminPanel=1');
     const sid = localStorage.getItem('ragSid') || crypto.randomUUID();
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
@@ -511,6 +538,7 @@
         }
         if (name === 'admin' && !adminInit) {
             adminInit = true; loadStats(); loadErrors(); loadFiles(); loadNight(); loadSettings();
+            loadExtFields($('extFields'));
         }
         if (name === 'prompts' && !promptsInit) {
             promptsInit = true; loadPrompts();
@@ -807,6 +835,98 @@
     }
 
     $('btnFiles').onclick = loadFiles;
+    /* ---- извлечение реквизитов: схема + тест на файле (админка и «Промты») ---- */
+    async function loadExtFields(el) {
+        if (!el) return;
+        try {
+            const j = await api('/api/rag/extract/schema');
+            const keys = Object.keys(j);
+            el.innerHTML = keys.length
+                ? keys.map(k => {
+                    const hint = String(j[k] ?? '').trim();
+                    return '<span class="sb"><b>' + esc(k) + '</b>' + (hint ? ' — ' + esc(hint) : '') + '</span>';
+                }).join('')
+                : '<span class="mono bad">⚠ схема пуста — задайте extract_json_schema на вкладке «Промты»</span>';
+        } catch (e) {
+            el.innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
+        }
+    }
+
+    /** Валидация схемы: JSON-объект {поле: подсказка}, не массив/скаляр, не пустой. */
+    function schemaCheck(v) {
+        try {
+            const o = JSON.parse(v);
+            if (typeof o !== 'object' || o === null || Array.isArray(o))
+                return {ok: false, msg: 'нужен JSON-объект { "поле": "подсказка" }, не массив/скаляр'};
+            const keys = Object.keys(o);
+            if (!keys.length) return {ok: false, msg: 'объект пуст — добавьте хотя бы одно поле'};
+            return {ok: true, msg: 'валидный JSON-объект, полей: ' + keys.length, obj: o};
+        } catch (e) {
+            return {ok: false, msg: 'не JSON: ' + e.message};
+        }
+    }
+
+    async function runExtract(fileEl, outEl, btn) {
+        const f = fileEl.files && fileEl.files[0];
+        if (!f) {
+            outEl.className = 'mono bad';
+            outEl.textContent = '⚠ выберите файл (doc, docx, pdf, rtf, txt)';
+            return;
+        }
+        const fd = new FormData();
+        fd.append('file', f, f.name);
+        btn.disabled = true;
+        const t = btn.textContent;
+        btn.textContent = '…извлекаю…';
+        outEl.className = 'mono';
+        outEl.textContent = '⏳ ' + f.name + ' (' + Math.round(f.size / 1024) + ' КБ): извлекаю… '
+            + 'LLM отвечает до пары минут — ждите.';
+        const t0 = Date.now();
+        try {
+            const r = await fetch('/api/rag/extract', {method: 'POST', body: fd});
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(String(j.error || ('HTTP ' + r.status)));
+            outEl.innerHTML = '';
+            const head = document.createElement('div');
+            head.className = 'mono ok';
+            head.textContent = '✓ ' + f.name + ' — ' + Object.keys(j).length + ' полей за '
+                + ((Date.now() - t0) / 1000).toFixed(1) + ' с:';
+            outEl.appendChild(head);
+            let h = '<table class="tbl" style="margin-top:6px"><tr><th style="width:28%">поле</th><th>значение</th></tr>';
+            for (const [k, v] of Object.entries(j)) {
+                const empty = String(v ?? '').trim() === '';
+                h += '<tr><td class="mono">' + esc(k) + '</td><td'
+                    + (empty ? ' style="color:#9aa3b5"' : '') + '>'
+                    + (empty ? '—' : esc(String(v))) + '</td></tr>';
+            }
+            const tbl = document.createElement('div');
+            tbl.innerHTML = h + '</table>';
+            outEl.appendChild(tbl);
+            const cp = document.createElement('button');
+            cp.type = 'button';
+            cp.className = 'sm';
+            cp.textContent = '⧉ Скопировать JSON';
+            cp.onclick = async () => {
+                try {
+                    await navigator.clipboard.writeText(JSON.stringify(j, null, 2));
+                    cp.textContent = '✓ Скопировано';
+                    setTimeout(() => cp.textContent = '⧉ Скопировать JSON', 1500);
+                } catch (e) {
+                    cp.textContent = '⚠ буфер недоступен';
+                }
+            };
+            outEl.appendChild(cp);
+        } catch (e) {
+            outEl.className = 'mono bad';
+            outEl.textContent = '⚠ ' + e.message;
+        }
+        btn.disabled = false;
+        btn.textContent = t;
+    }
+
+    $('btnExtRefresh').onclick = () => loadExtFields($('extFields'));
+    $('btnExtract').onclick = e => runExtract($('extFile'), $('extOut'), e.target);
+    $('btnExtractP').onclick = e => runExtract($('extFileP'), $('extOutP'), e.target);
 
     /* ---- вкладка «Промты»: rag_control ask/compare/summary_system_prompt ---- */
     async function loadPrompts() {
@@ -822,6 +942,7 @@
     }
 
     function promptCard(p) {
+        const isSchema = p.key === 'extract_json_schema';
         const card = document.createElement('div');
         card.className = 'acard';
 
@@ -853,8 +974,41 @@
         const stat = document.createElement('div');
         stat.className = 'pstat';
 
+        ta.oninput = () => {
+            btnSave.disabled = ta.value === orig;
+            if (ta.value === orig) {
+                stat.className = 'pstat';
+                stat.textContent = '';
+            } else if (isSchema) {
+                const c = schemaCheck(ta.value);        // живая валидация JSON-схемы
+                stat.className = 'pstat' + (c.ok ? '' : ' err');
+                stat.textContent = (c.ok ? '✓ ' : '⚠ ') + c.msg + ' — не сохранено';
+            } else {
+                stat.className = 'pstat';
+                stat.textContent = 'не сохранено';
+            }
+        };
+
         const row = document.createElement('div');
         row.className = 'arow';
+        if (isSchema) {
+            const btnFmt = document.createElement('button');
+            btnFmt.type = 'button';
+            btnFmt.className = 'gray';
+            btnFmt.textContent = '⇄ Форматировать';
+            btnFmt.title = 'Выровнять JSON отступами (валидация сначала)';
+            btnFmt.onclick = () => {
+                const c = schemaCheck(ta.value);
+                if (!c.ok) {
+                    stat.className = 'pstat err';
+                    stat.textContent = '⚠ ' + c.msg;
+                    return;
+                }
+                ta.value = JSON.stringify(c.obj, null, 2);
+                ta.oninput();
+            };
+            row.append(btnFmt);
+        }
         const btnDef = document.createElement('button');
         btnDef.type = 'button';
         btnDef.className = 'gray';
@@ -863,13 +1017,8 @@
         const btnSave = document.createElement('button');
         btnSave.type = 'button';
         btnSave.textContent = '💾 Сохранить';
-        btnSave.disabled = true;                     // включится при изменении текста
+        btnSave.disabled = true;
         row.append(btnDef, btnSave);
-
-        ta.oninput = () => {
-            btnSave.disabled = ta.value === orig;
-            stat.textContent = ta.value === orig ? '' : 'не сохранено';
-        };
 
         btnSave.onclick = async () => {
             btnSave.disabled = true;
@@ -879,10 +1028,12 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({key: p.key, value: ta.value})
                 });
-                orig = ta.value;                     // новая точка отсчёта для «не сохранено»
+                orig = ta.value;
                 stat.className = 'pstat';
-                stat.textContent = '✓ сохранено (' + j.chars + ' симв.) — действует со следующего вопроса';
+                stat.textContent = '✓ сохранено (' + j.chars + ' симв.) — действует '
+                    + (isSchema ? 'со следующего файла (/api/rag/extract)' : 'со следующего вопроса');
                 hint.textContent = '';
+                if (isSchema) loadExtFields($('extFields'));   // обновить бейджи схемы в админке
             } catch (e) {
                 stat.className = 'pstat err';
                 stat.textContent = '⚠ ' + e.message;
@@ -899,7 +1050,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({key: p.key})
                 });
-                loadPrompts();                       // перерисовать: значение станет пустым
+                loadPrompts();
             } catch (e) {
                 stat.className = 'pstat err';
                 stat.textContent = '⚠ ' + e.message;
