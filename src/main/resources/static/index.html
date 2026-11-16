@@ -7,7 +7,12 @@
     .ver{font-size:11px;color:#9aa3b5;font-weight:400;background:#e9edf4;padding:1px 7px;border-radius:999px}
     #newChat{background:#fff;color:#1d4ed8;border:1px solid #8fb0f7;padding:6px 12px;font-size:.9em}
     #newChat:hover{background:#e3edff;border-color:#2563eb}
-
+    /* ===== переключатель режима чата ===== */
+    #modeRow{display:flex;gap:6px;margin-top:12px}
+    .mode{flex:none;padding:6px 14px;font-size:.85em;border:1px solid #c9d2e3;border-radius:999px;
+        background:#e4e9f4;color:#42506b}
+    .mode.on{background:#1d4ed8;border-color:#1d4ed8;color:#fff;font-weight:600}
+    .mode:not(.on):hover{background:#e3edff;border-color:#8fb0f7}
     /* ===== вкладки ===== */
     #tabs{display:flex;gap:6px;margin-top:12px}
     #tabs[hidden]{display:none}         /* display:flex перебивает hidden — как у #viewAdmin */
@@ -17,6 +22,9 @@
     #viewAdmin{display:flex;flex-direction:column;gap:12px;background:#fff;border:1px solid #dde;
         border-radius:10px;padding:14px;height:calc(62vh + 58px);overflow-y:auto}
     #viewAdmin[hidden]{display:none}     /* display:flex перебивает hidden — возвращаем */
+    #viewPrompts{display:flex;flex-direction:column;gap:12px;background:#fff;border:1px solid #dde;
+        border-radius:10px;padding:14px;height:calc(62vh + 58px);overflow-y:auto}
+    #viewPrompts[hidden]{display:none}
 
     #chat{display:flex;flex-direction:column;gap:10px;height:62vh;overflow-y:auto;padding:14px;
         background:#fff;border:1px solid #dde;border-radius:10px}
@@ -86,19 +94,32 @@
     .tbl th{text-align:left;color:#8a94a8;font-weight:600;padding:4px 6px;border-bottom:1px solid #dfe5f0}
     .tbl td{padding:4px 6px;border-bottom:1px solid #eef1f6;vertical-align:top;word-break:break-word}
     .gw{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+
+    /* ===== вкладка «Промты» ===== */
+    .pta{width:100%;min-height:190px;box-sizing:border-box;resize:vertical;
+        font-family:Consolas,"Courier New",monospace;font-size:12.5px;line-height:1.45;
+        padding:8px 10px;border:1px solid #ccc;border-radius:6px;white-space:pre;overflow:auto}
+    .pkey{font-family:Consolas,"Courier New",monospace;font-size:11px;color:#8a94a8}
+    .pstat{font-size:12px;color:#8a94a8;margin-top:4px}
+    .pstat.err{color:#b91c1c}
 </style></head><body>
 <div id="top">
-    <h3>Чат по базе знаний <span class="ver">v4.5</span></h3>
+    <h3>Чат по базе знаний <span class="ver">v4.6</span></h3>
     <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
 </div>
 
 <div id="tabs">
     <button type="button" class="tab on" id="tabChat">💬 Чат</button>
     <button type="button" class="tab" id="tabAdmin">🛠 Админ-панель</button>
+    <button type="button" class="tab" id="tabPrompts">📝 Промты</button>
 </div>
 
 <!-- ==================== вкладка «Чат» ==================== -->
 <div id="viewChat">
+    <div id="modeRow">
+        <button type="button" class="mode on" id="modeRag" title="Векторный поиск по базе знаний + LLM">📚 По документам</button>
+        <button type="button" class="mode" id="modeDirect" title="Прямой диалог с LLM (rag.llm), без базы знаний">💬 Свободный чат</button>
+    </div>
     <div id="chat"></div>
     <form id="f">
         <select id="cls" title="Признак документа"></select>
@@ -189,16 +210,50 @@
 
 </div>
 
+<!-- ==================== вкладка «Промты» ==================== -->
+<div id="viewPrompts" hidden>
+    <div class="acard">
+        <div class="mono" style="font-size:11.5px;color:#8a94a8">
+            System-промпты лежат в dbo.rag_control и читаются перед КАЖДЫМ вопросом — изменения
+            применяются сразу, без рестарта, на все инстансы. «Дефолт из кода» удаляет строку из
+            таблицы: работает DEFAULT, зашитый в Java-классе (после рестарта он же просеется в БД).
+            Ключи: ask_system_prompt · compare_system_prompt · summary_system_prompt
+            · direct_chat_system_prompt (свободный чат).
+        </div>
+    </div>
+    <div id="promptsList"></div>
+</div>
+
 <script>
-    console.info('RAG UI v4.5 — админ-вкладка открывается только ссылкой с ?adminPanel=1');
+    console.info('RAG UI v4.6 — админ-панель и промты открываются только ссылкой с ?adminPanel=1');
     const sid = localStorage.getItem('ragSid') || crypto.randomUUID();
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
     const cls = document.getElementById('cls');
 
-    /* админ-вкладка видна только при adminPanel=1 в адресе страницы:
+    /* режим чата: 'rag' — по документам (embedding + Chroma), 'direct' — прямой диалог с LLM.
+       Выбор сохраняется в localStorage; истории режимов раздельные (разные сервисы на бэкенде). */
+    let chatMode = localStorage.getItem('chatMode') === 'direct' ? 'direct' : 'rag';
+    const modeRag = document.getElementById('modeRag');
+    const modeDirect = document.getElementById('modeDirect');
+
+    function applyChatMode() {
+        modeRag.classList.toggle('on', chatMode === 'rag');
+        modeDirect.classList.toggle('on', chatMode === 'direct');
+        cls.disabled = chatMode === 'direct';     // признак документа нужен только RAG-режиму
+        cls.title = chatMode === 'direct' ? 'Недоступно в свободном чате' : 'Признак документа';
+        document.getElementById('i').placeholder = chatMode === 'direct'
+            ? 'Спросите что угодно — свободный чат с ИИ…' : 'Спросите по документам…';
+        localStorage.setItem('chatMode', chatMode);
+    }
+
+    modeRag.onclick = () => { chatMode = 'rag'; applyChatMode(); };
+    modeDirect.onclick = () => { chatMode = 'direct'; applyChatMode(); };
+    applyChatMode();
+
+    /* вкладки «Админ» и «Промты» видны только при adminPanel=1 в адресе страницы:
        http://host/            → чистый чат, полосы вкладок нет вовсе
-       http://host/?adminPanel=1  (или ...&adminPanel=1) → вкладки Чат/Админ как раньше */
+       http://host/?adminPanel=1  (или ...&adminPanel=1) → вкладки Чат/Админ/Промты */
     const isAdmin = new URLSearchParams(location.search).get('adminPanel') === '1';
     if (!isAdmin) document.getElementById('tabs').hidden = true;
 
@@ -371,37 +426,42 @@
         });
     }
 
-    /* ---------- отправка вопроса ---------- */
+    /* ---------- отправка вопроса (RAG или свободный чат — по переключателю) ---------- */
     document.getElementById('f').onsubmit = async e => {
         e.preventDefault();
         const inp = document.getElementById('i');
         const q = inp.value.trim();
         if (!q) return;
         inp.value = '';
+        const direct = chatMode === 'direct';
         const u = document.createElement('div');
         u.className = 'm u';
         u.textContent = q;
         box.appendChild(u);
         const a = document.createElement('div');
         a.className = 'm a';
-        a.textContent = '…ищу в документах и думаю…';
+        a.textContent = direct ? '…думаю…' : '…ищу в документах и думаю…';
         box.appendChild(a);
         box.scrollTop = box.scrollHeight;
         try {
-            const r = await fetch('/api/rag/chat', {
+            const r = await fetch(direct ? '/api/rag/direct-chat' : '/api/rag/chat', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({sessionId: sid, message: q, classifier: cls.value || null})
+                body: JSON.stringify(direct
+                    ? {sessionId: sid, message: q}
+                    : {sessionId: sid, message: q, classifier: cls.value || null})
             });
             const j = await r.json().catch(() => ({}));
             const answerText = String(j && j.answer != null ? j.answer : '').trim();
             if (!r.ok) {
                 a.textContent = '⚠ ' + (String(j.error || '') || 'Сервис ответил ошибкой ' + r.status);
             } else if (!answerText) {
-                a.textContent = 'Не нашлось ответа по вашему вопросу. Попробуйте переформулировать '
+                a.textContent = direct
+                    ? 'Модель вернула пустой ответ — попробуйте переформулировать вопрос.'
+                    : 'Не нашлось ответа по вашему вопросу. Попробуйте переформулировать '
                     + 'или выбрать другой признак документа.';
             } else {
                 a.innerHTML = md(answerText);
-                if (Array.isArray(j.sources) && j.sources.length) {
+                if (!direct && Array.isArray(j.sources) && j.sources.length) {
                     try {
                         box.appendChild(sourcesEl(j.sources));
                         linkCites(a, j.sources);
@@ -416,12 +476,16 @@
         box.scrollTop = box.scrollHeight;
     };
 
-    /* ====================== вкладка «Админ» ====================== */
+    /* ====================== вкладки «Админ» / «Промты» ====================== */
     const $ = id => document.getElementById(id);
-    const tabChat = $('tabChat'), tabAdmin = $('tabAdmin');
-    const viewChat = $('viewChat'), viewAdmin = $('viewAdmin');
+    const TABS = {
+        chat:    {tab: 'tabChat',    view: 'viewChat'},
+        admin:   {tab: 'tabAdmin',   view: 'viewAdmin'},
+        prompts: {tab: 'tabPrompts', view: 'viewPrompts'}
+    };
+    const viewAdmin = $('viewAdmin');
     const actOut = $('actOut'), selfOut = $('selfOut');
-    let adminInit = false;
+    let adminInit = false, promptsInit = false;
 
     /* единый вызов API: всегда JSON, ошибки бэкенда — в исключение */
     async function api(url, opts) {
@@ -439,17 +503,23 @@
         actOut.textContent = '[' + new Date().toLocaleTimeString('ru-RU') + '] ' + s;
     }
 
-    function showTab(admin) {
-        if (admin && !isAdmin) return;   // без adminPanel=1 админ недоступен и через консоль
-        tabChat.classList.toggle('on', !admin);
-        tabAdmin.classList.toggle('on', admin);
-        viewChat.hidden = admin;
-        viewAdmin.hidden = !admin;
-        if (admin && !adminInit) { adminInit = true; loadStats(); loadErrors(); loadFiles(); loadNight(); loadSettings(); }
+    function showTab(name) {
+        if (name !== 'chat' && !isAdmin) return;   // без adminPanel=1 доступен только чат
+        for (const [k, v] of Object.entries(TABS)) {
+            $(v.tab).classList.toggle('on', k === name);
+            $(v.view).hidden = k !== name;
+        }
+        if (name === 'admin' && !adminInit) {
+            adminInit = true; loadStats(); loadErrors(); loadFiles(); loadNight(); loadSettings();
+        }
+        if (name === 'prompts' && !promptsInit) {
+            promptsInit = true; loadPrompts();
+        }
     }
 
-    tabChat.onclick = () => showTab(false);
-    tabAdmin.onclick = () => showTab(true);
+    $('tabChat').onclick = () => showTab('chat');
+    $('tabAdmin').onclick = () => showTab('admin');
+    $('tabPrompts').onclick = () => showTab('prompts');
 
     /* ---- состояние (stats + paused + indexSize + сверка embedding) ---- */
     const ST = {
@@ -737,6 +807,108 @@
     }
 
     $('btnFiles').onclick = loadFiles;
+
+    /* ---- вкладка «Промты»: rag_control ask/compare/summary_system_prompt ---- */
+    async function loadPrompts() {
+        const el = $('promptsList');
+        el.innerHTML = '<div class="mono">загружаю…</div>';
+        try {
+            const list = await api('/api/rag/admin/prompts');
+            el.innerHTML = '';
+            for (const p of list) el.appendChild(promptCard(p));
+        } catch (e) {
+            el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
+        }
+    }
+
+    function promptCard(p) {
+        const card = document.createElement('div');
+        card.className = 'acard';
+
+        const head = document.createElement('div');
+        head.className = 'ahead';
+        const b = document.createElement('b');
+        b.textContent = p.title;
+        const btnRef = document.createElement('button');
+        btnRef.type = 'button';
+        btnRef.className = 'sm';
+        btnRef.textContent = '⟳ Обновить';
+        btnRef.onclick = loadPrompts;
+        head.append(b, btnRef);
+
+        const key = document.createElement('div');
+        key.className = 'pkey';
+        key.textContent = p.key;
+
+        const ta = document.createElement('textarea');
+        ta.className = 'pta';
+        ta.spellcheck = false;
+        ta.value = p.value;
+        let orig = p.value;
+
+        const hint = document.createElement('div');
+        hint.className = 'pstat';
+        if (!orig) hint.textContent = '⚠ в БД не задан — работает дефолт из кода';
+
+        const stat = document.createElement('div');
+        stat.className = 'pstat';
+
+        const row = document.createElement('div');
+        row.className = 'arow';
+        const btnDef = document.createElement('button');
+        btnDef.type = 'button';
+        btnDef.className = 'gray';
+        btnDef.textContent = '↺ Дефолт из кода';
+        btnDef.title = 'Удалить строку из rag_control — заработает DEFAULT из Java-класса';
+        const btnSave = document.createElement('button');
+        btnSave.type = 'button';
+        btnSave.textContent = '💾 Сохранить';
+        btnSave.disabled = true;                     // включится при изменении текста
+        row.append(btnDef, btnSave);
+
+        ta.oninput = () => {
+            btnSave.disabled = ta.value === orig;
+            stat.textContent = ta.value === orig ? '' : 'не сохранено';
+        };
+
+        btnSave.onclick = async () => {
+            btnSave.disabled = true;
+            try {
+                const j = await api('/api/rag/admin/prompts', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({key: p.key, value: ta.value})
+                });
+                orig = ta.value;                     // новая точка отсчёта для «не сохранено»
+                stat.className = 'pstat';
+                stat.textContent = '✓ сохранено (' + j.chars + ' симв.) — действует со следующего вопроса';
+                hint.textContent = '';
+            } catch (e) {
+                stat.className = 'pstat err';
+                stat.textContent = '⚠ ' + e.message;
+                btnSave.disabled = false;
+            }
+        };
+
+        btnDef.onclick = async () => {
+            if (!confirm('Вернуть промпт «' + p.title + '» к дефолту из кода?\n' +
+                'Текущий текст в БД будет удалён.')) return;
+            try {
+                await api('/api/rag/admin/prompts/reset', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({key: p.key})
+                });
+                loadPrompts();                       // перерисовать: значение станет пустым
+            } catch (e) {
+                stat.className = 'pstat err';
+                stat.textContent = '⚠ ' + e.message;
+            }
+        };
+
+        card.append(head, key, ta, hint, row, stat);
+        return card;
+    }
 
     /* лёгкий опрос состояния, пока открыта админ-вкладка */
     setInterval(() => {

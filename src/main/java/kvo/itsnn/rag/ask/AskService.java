@@ -33,10 +33,12 @@ public class AskService {
     private final LlmClient llm;
     private final SystemPromptProvider prompts;   // system-промпт из rag_control
     private final CompareService compare;         // D: сценарий «сравнение версий»
+    private final DocSummaryService summary;      // E: сценарий «краткое содержание документа»
 
     public AskService(LlmProperties cfg, RagProperties props, Embedder embedder,
                       VectorIndex index, JdbcTemplate jdbc, LlmClient llm,
-                      SystemPromptProvider prompts, CompareService compare) {
+                      SystemPromptProvider prompts, CompareService compare,
+                      DocSummaryService summary) {
         this.cfg = cfg;
         this.props = props;
         this.embedder = embedder;
@@ -45,6 +47,7 @@ public class AskService {
         this.llm = llm;
         this.prompts = prompts;
         this.compare = compare;
+        this.summary = summary;
         log.info("AskService: candidateChunks={}, contextChunks={}, queryPrefix='{}'",
                 cfg.candidateChunks(), cfg.contextChunks(), props.embedding().queryPrefix());
     }
@@ -69,6 +72,10 @@ public class AskService {
         // D: вопрос-сравнение версий идёт отдельным сценарием; не сработал детектор — обычный путь
         Optional<AskResult> cmp = compare.tryCompare(query, classifier);
         if (cmp.isPresent()) return cmp.get();
+
+        // E: «краткое содержание <код> [версия N]» — конспект по началу файла, не по векторам
+        Optional<AskResult> sum = summary.trySummary(query, classifier);
+        if (sum.isPresent()) return sum.get();
 
         List<ChunkHit> best = retrieve(query, classifier);
         if (best.isEmpty()) {
