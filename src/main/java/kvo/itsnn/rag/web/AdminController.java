@@ -24,6 +24,10 @@ import java.util.*;
 public class AdminController {
 
     private static final String RESULT = "result";
+    private static final String SAVED = "saved";
+    private static final String KEY = "key";
+    private static final String NIGHT_START = "nightStart";
+    private static final String NIGHT_END = "nightEnd";
     private static final String OK = "ok";
     private static final String ERROR = "error";
     private static final String MODEL = "model";
@@ -78,7 +82,7 @@ public class AdminController {
         LocalTime end = refs.ctrlTime(RefRepository.NIGHT_END_KEY, props.nightEnd());
         LocalTime now = LocalTime.now();
         boolean night = !now.isBefore(start) || now.isBefore(end);
-        return Map.of("nightStart", start.toString(), "nightEnd", end.toString(), "night", night);
+        return Map.of(NIGHT_START, start.toString(), NIGHT_END, end.toString(), "night", night);
     }
 
     public record NightWindowRequest(String nightStart, String nightEnd) {}
@@ -93,7 +97,7 @@ public class AdminController {
         if (start.equals(end))
             throw new IllegalArgumentException("начало и конец окна не должны совпадать");
         refs.setNightWindow(start, end);
-        return Map.of(RESULT, "saved", "nightStart", start.toString(), "nightEnd", end.toString());
+        return Map.of(RESULT, SAVED, NIGHT_START, start.toString(), NIGHT_END, end.toString());
     }
 
     private static LocalTime parseTime(String s) {
@@ -125,7 +129,7 @@ public class AdminController {
         refs.setCtrlInt(RefRepository.INGEST_BATCH_DAY_KEY, day);
         refs.setCtrlInt(RefRepository.INGEST_BATCH_NIGHT_KEY, night);
         refs.setCtrlInt(RefRepository.DAY_HOUR_LIMIT_KEY, limit);
-        return Map.of(RESULT, "saved", "pollIntervalSec", poll, "ingestBatchDay", day,
+        return Map.of(RESULT, SAVED, "pollIntervalSec", poll, "ingestBatchDay", day,
                 "ingestBatchNight", night, "dayHourLimit", limit);
     }
     private static int intInRange(Integer v, String name, int min, int max) {
@@ -177,8 +181,6 @@ public class AdminController {
                 "at", rs.getTimestamp(4).toString()));
     }
 
-    /** ===== вкладка «Промты»: просмотр/правка system-промптов в rag_control ===== */
-
     /** Список промптов с текущими значениями из БД (пусто — работает дефолт из кода). */
     @GetMapping("/prompts")
     public List<Map<String, Object>> prompts() {
@@ -187,7 +189,7 @@ public class AdminController {
             List<String> v = jdbc.queryForList(
                     "SELECT ctrl_value FROM dbo.rag_control WHERE ctrl_key = ?", String.class, p.key());
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("key", p.key());
+            m.put(KEY, p.key());          // ← было m.put("key", p.key()) — просто литерал заменён константой
             m.put("title", p.title());
             m.put("value", v.isEmpty() || v.get(0) == null ? "" : v.get(0));
             out.add(m);
@@ -217,7 +219,7 @@ public class AdminController {
                 WHEN MATCHED THEN UPDATE SET t.ctrl_value = ?
                 WHEN NOT MATCHED THEN INSERT (ctrl_key, ctrl_value) VALUES (s.k, ?);
                 """, req.key(), value, value);
-        return Map.of(RESULT, "saved", "key", req.key(), "chars", value.length());
+        return Map.of(RESULT, SAVED, KEY, req.key(), "chars", value.length());
     }
 
     /** Сброс: строка удаляется — провайдер тут же берёт DEFAULT из кода,
@@ -226,7 +228,7 @@ public class AdminController {
     public Map<String, String> resetPrompt(@RequestBody PromptRequest req) {
         titleOf(req.key());
         jdbc.update("DELETE FROM dbo.rag_control WHERE ctrl_key = ?", req.key());
-        return Map.of(RESULT, "default", "key", req.key());
+        return Map.of(RESULT, "default", KEY, req.key());
     }
 
     /** Подпись по ключу; IllegalArgumentException — ключ не из списка. */

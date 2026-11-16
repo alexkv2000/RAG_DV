@@ -41,22 +41,21 @@ public class ExtractPromptProvider {
             5. Даты приводи к формату ДД.ММ.ГГГГ, суммы — цифрами без пробелов и валюты.""";
 
     private static final String DEFAULT_SCHEMA = """
-            {
-              	  "document_kind": "Вид документа",
-                  "document_type": "Тип документа (приказ, распоряжение, договор, письмо и т.п.)",
-                  "document_function": "Функция документа",
-                  "organization_LE": "Ю.Л. Группы",
-                  "document_number": "Номер документа",
-                  "document_date": "дата документа, ДД.ММ.ГГГГ",
-                  "subject_agreement": "Предмет договора - ОРД/Внутренний/другие документы",
-                  "contragent": "Организация, Контрагентов",
-                  "subject": "Тема/заголовок документа",
-                  "amount": "Сумма цифрами, если есть",
-                  "amount NDS": "Сумма НДС, если есть",
-                  "summary": "Краткое содержание в 1-2 предложениях",
-                  "regisration_number": "Рег.номер, если есть",
-                  "regisration_date": "Дата регистрации, если есть",
-                  "signer": "Подписант со стороны Ю.Л. Группы, если есть"
+            {"document_kind": "Вид документа",
+            "document_type": "Тип документа (приказ, распоряжение, договор, письмо и т.п.)",
+            "document_function": "Функция документа",
+            "organization_LE": "Ю.Л. Группы",
+            "document_number": "Номер документа",
+            "document_date": "дата документа, ДД.ММ.ГГГГ",
+            "subject_agreement": "Предмет договора - ОРД/Внутренний/другие документы",
+            "contragent": "Организация, Контрагентов",
+            "subject": "Тема/заголовок документа",
+            "amount": "Сумма цифрами, если есть",
+            "amount NDS": "Сумма НДС, если есть",
+            "summary": "Краткое содержание в 1-2 предложениях",
+            "regisration_number": "Рег.номер, если есть",
+            "regisration_date": "Дата регистрации, если есть",
+            "signer": "Подписант со стороны Ю.Л. Группы, если есть"
             }""";
 
     private static final ObjectMapper JSON = JsonMapper.builder().build();
