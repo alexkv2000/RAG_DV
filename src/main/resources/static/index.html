@@ -253,8 +253,17 @@
 </div>
 
 <script>
-    console.info('RAG UI v4.8 — админ-панель и промты открываются только ссылкой с ?adminPanel=1');
-    const sid = localStorage.getItem('ragSid') || crypto.randomUUID();
+    console.info('RAG UI v5.0 — возможность устанавливать ПО на серверах по http протоколу');
+    /* crypto.randomUUID() есть только в secure context (https/localhost);
+       на http://w17-051911:8080 его нет — скрипт падал на этой строке. */
+    function uuid() {
+        if (crypto.randomUUID) return crypto.randomUUID();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    }
+    const sid = localStorage.getItem('ragSid') || uuid();
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
     const cls = document.getElementById('cls');

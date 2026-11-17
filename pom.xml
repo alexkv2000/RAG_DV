@@ -9,7 +9,7 @@
         <version>4.1.1</version>
         <relativePath/>
     </parent>
-    <groupId>com.company.rag</groupId>
+    <groupId>kvo.itsnn.rag</groupId>
     <artifactId>rag-indexer</artifactId>
     <version>1.0.0</version>
     <properties>
