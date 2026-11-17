@@ -64,19 +64,38 @@ public class ApiExceptionHandler {
                 .body(Map.of(ERROR, "некорректное тело запроса: ожидается JSON {\"query\": \"...\"}"));
     }
 
-    /** Прикреплённый файл больше лимита multipart (spring.servlet.multipart.max-file-size). */
+    /**
+     * Файл/запрос больше лимита multipart. Глубинная причина содержит точные цифры
+     * Tomcat («its size (N) exceeds any configured maximum (M)») — они и различают
+     * «файл действительно огромный» (M = 67108864 = 64 МБ) от «лимит не применился»
+     * (M = 1048576 = дефолт 1 МБ). Показываем их и в логе, и в ответе клиенту.
+     */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<Map<String, String>> tooBig(MaxUploadSizeExceededException e) {
-        log.warn("Файл больше лимита multipart: {}", e.getMessage());
+        String detail = deepest(e);
+        log.warn("Файл больше лимита multipart: {}", detail);
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
-                .body(Map.of(ERROR, "файл слишком большой (лимит задан в spring.servlet.multipart.max-file-size)"));
+                .body(Map.of(ERROR, "файл/запрос больше лимита multipart: " + detail));
     }
 
-    /** Прочие проблемы multipart (битая кодировка, обрыв загрузки). */
+    /** Прочие проблемы multipart (нет boundary, битая разметка, обрыв загрузки). */
     @ExceptionHandler(MultipartException.class)
     public ResponseEntity<Map<String, String>> multipart(MultipartException e) {
-        log.warn("Multipart сбой: {}", e.getMessage());
+        String detail = deepest(e);
+        log.warn("Multipart сбой: {}", detail);
         return ResponseEntity.badRequest()
-                .body(Map.of(ERROR, "некорректный multipart-запрос: " + e.getMessage()));
+                .body(Map.of(ERROR, "некорректный multipart-запрос: " + detail));
+    }
+
+    /** Самое глубокое сообщение цепочки причин: класс + текст (у Tomcat там цифры лимитов). */
+    private static String deepest(Throwable e) {
+        Throwable t = e;
+        while (t.getCause() != null && t.getCause() != t) {
+            t = t.getCause();
+        }
+        String m = t.getMessage();
+        return (m == null || m.isBlank())
+                ? t.getClass().getSimpleName()
+                : t.getClass().getSimpleName() + ": " + m;
     }
 }

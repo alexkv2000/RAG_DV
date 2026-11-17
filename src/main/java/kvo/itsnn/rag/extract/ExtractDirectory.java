@@ -7,13 +7,21 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * Справочники DocsVision для проверки значений интеграции «файл → JSON»:
  *  - виды документов  dvtable_{c7ba000c-…}                 → поле document_kind
  *  - типы документов  dvtable_{1b1a44fb-…} под узлами «тип…» → поле document_type
  *  - юр. лица группы  dvtable_{7473f07f-…} Type=0, активные → поле organization_LE (+ ИНН/КПП)
- * Значение LLM приводится к каноническому имени справочника; совпадения нет — поле очищается.
+ *
+ * Правила сопоставления (после нормализации: нижний регистр, ё→е, без кавычек/пунктуации/оргформ):
+ *  - вид/тип: точное совпадение, иначе имя справочника ЦЕЛИКОМ входит в значение модели.
+ *    Обратное направление (значение внутри длинного названия маршрута) запрещено — иначе
+ *    «Письмо» подтягивало «Маршрут согласования (письмо о предоплате, сложный)».
+ *    Нет совпадения → null → поле очищается (пустое честнее неверного).
+ *  - юр. лицо: обе стороны — модель может назвать и краткое имя («ЦИТРБ»), и полное;
+ *    из кандидатов берём самый длинный ключ (самое полное имя справочника).
  * Справочники маленькие и меняются редко: кэш на 10 минут, перечитывается лениво.
  */
 @Component
@@ -37,6 +45,19 @@ public class ExtractDirectory {
     public static final String KEY_INN = "organization_LE_INN";
     public static final String KEY_KPP = "organization_LE_KPP";
 
+    /* ---------- нормализация: шаблоны компилируются один раз ---------- */
+
+    /** Кавычки и пунктуация → пробел (№ тоже, чтобы не склеивался с числом). */
+    private static final Pattern PUNCT = Pattern.compile("[«»\"'“”‘’()\\-—–.,;:!?№]");
+
+    /** Оргформы вырезаем. Флаг UNICODE_CHARACTER_CLASS обязателен: без него \b — ASCII-граница,
+     *  у кириллических «ооо» границы нет и вырезание молча не работало. */
+    private static final Pattern ORG_FORM = Pattern.compile(
+            "\\b(ооо|оао|зао|пао|ао|нпо|фгуп|фгу|гуп|ип)\\b",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+
+    private static final Pattern SPACES = Pattern.compile("\\s+");
+
     private final JdbcTemplate jdbc;
     private volatile Dicts cache;
     private volatile boolean warned;
@@ -45,14 +66,14 @@ public class ExtractDirectory {
         this.jdbc = jdbc;
     }
 
-    /** Канонический вид документа; null — в справочнике нет. */
+    /** Канонический вид документа; null — в справочнике нет (поле будет очищено). */
     public String kindOf(String value) {
-        return best(value, dicts().kinds());
+        return best(value, dicts().kinds(), false);
     }
 
     /** Канонический тип документа; null — в справочнике нет. */
     public String typeOf(String value) {
-        return best(value, dicts().types());
+        return best(value, dicts().types(), false);
     }
 
     /** Юр. лицо по Name/FullName; null — в справочнике нет. */
@@ -66,9 +87,10 @@ public class ExtractDirectory {
         Le best = null;
         int bestLen = 0;
         for (Map.Entry<String, Le> e : les.entrySet()) {
-            int len = e.getKey().length();
+            String key = e.getKey();
+            int len = key.length();
             if (len < MIN_CONTAINS_LEN || len <= bestLen) continue;
-            if (n.contains(e.getKey()) || e.getKey().contains(n)) {
+            if (n.contains(key) || key.contains(n)) {   // обе стороны: и краткое, и полное имя
                 best = e.getValue();
                 bestLen = len;
             }
@@ -91,8 +113,14 @@ public class ExtractDirectory {
 
     /* ---------- внутреннее ---------- */
 
-    /** Точное совпадение по нормализованному ключу, иначе «содержится» (берём самое длинное имя). */
-    private static String best(String value, Map<String, String> dict) {
+    /**
+     * Точное совпадение, иначе «содержится».
+     * allowLongerKey=false (виды/типы): только ключ ЦЕЛИКОМ внутри значения модели;
+     *   длинные названия маршрутов, содержащие короткое слово модели, — ложные попадания.
+     * allowLongerKey=true зарезервирован для ЮЛ (см. leOf) — там обе стороны допустимы.
+     * Из кандидатов берём самый длинный ключ — самое конкретное имя.
+     */
+    private static String best(String value, Map<String, String> dict, boolean allowLongerKey) {
         if (value == null || value.isBlank()) return null;
         String n = norm(value);
         if (n.isEmpty()) return null;
@@ -101,9 +129,10 @@ public class ExtractDirectory {
         String best = null;
         int bestLen = 0;
         for (Map.Entry<String, String> e : dict.entrySet()) {
-            int len = e.getKey().length();
+            String key = e.getKey();
+            int len = key.length();
             if (len < MIN_CONTAINS_LEN || len <= bestLen) continue;
-            if (n.contains(e.getKey()) || e.getKey().contains(n)) {
+            if (n.contains(key) || (allowLongerKey && key.contains(n))) {
                 best = e.getValue();
                 bestLen = len;
             }
@@ -164,15 +193,13 @@ public class ExtractDirectory {
         return new Dicts(kinds, types, les, Instant.now());
     }
 
-    /** Ключ сопоставления: нижний регистр, ё→е, без кавычек/пунктуации и оргформ (ООО, ПАО…). */
+    /** Ключ сопоставления: нижний регистр, ё→е, без кавычек/пунктуации/№ и оргформ (ООО, ПАО…). */
     static String norm(String s) {
         if (s == null) return "";
-        return s.toLowerCase(Locale.ROOT)
-                .replace('ё', 'е')
-                .replaceAll("[«»\"'“”‘’()\\-—–.,;:!?]", " ")
-                .replaceAll("\\b(ооо|оао|зао|пао|ао|нпо|фгуп|фгу|гуп|ип)\\b", " ")
-                .replaceAll("\\s+", " ")
-                .strip();
+        String n = s.toLowerCase(Locale.ROOT).replace('ё', 'е');
+        n = PUNCT.matcher(n).replaceAll(" ");
+        n = ORG_FORM.matcher(n).replaceAll(" ");
+        return SPACES.matcher(n).replaceAll(" ").strip();
     }
 
     private static String nz(String s) {
