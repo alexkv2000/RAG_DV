@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
+import java.util.LinkedHashMap;
 
 import java.util.List;
 import java.util.Map;
@@ -38,13 +39,17 @@ public class ExtractPromptProvider {
             2. Ключи — ровно те и в том же написании, что в списке полей. Лишних ключей не добавляй.
             3. Значение каждого поля — строка. Нет значения в документе — пустая строка "".
             4. Не выдумывай: пиши только то, что видно в тексте.
-            5. Даты приводи к формату ДД.ММ.ГГГГ, суммы — цифрами без пробелов и валюты.""";
-
+            5. Даты приводи к формату ДД.ММ.ГГГГ, суммы — цифрами без пробелов и валюты.
+            6. Строку organization_LE — только юр. лицо ГРУППЫ; сторонняя организация — в поле contragent, не путай их.
+            7. Поля document_kind (вид), document_type (тип) и organization_LE (юр. лицо группы) система сверяет со справочниками: пиши значение так, как оно звучит в справочнике.
+            8. Поля organization_LE_INN / organization_LE_KPP не заполняй — их подставит система.""";
     private static final String DEFAULT_SCHEMA = """
             {"document_kind": "Вид документа",
             "document_type": "Тип документа (приказ, распоряжение, договор, письмо и т.п.)",
             "document_function": "Функция документа",
             "organization_LE": "Ю.Л. Группы",
+            "organization_LE_INN": "не заполнять — подставляется из справочника",
+            "organization_LE_KPP": "не заполнять — подставляется из справочника",
             "document_number": "Номер документа",
             "document_date": "дата документа, ДД.ММ.ГГГГ",
             "subject_agreement": "Предмет договора - ОРД/Внутренний/другие документы",
@@ -59,7 +64,7 @@ public class ExtractPromptProvider {
             }""";
 
     private static final ObjectMapper JSON = JsonMapper.builder().build();
-
+    private static final String REQ_HINT = "не заполнять — подставляется из справочника";
     private final JdbcTemplate jdbc;
     private volatile boolean warned;
 
@@ -87,20 +92,66 @@ public class ExtractPromptProvider {
     /**
      * Схема полей как упорядоченная Map (LinkedHashMap — порядок ключей сохраняется).
      * Битый JSON в таблице → WARN один раз + дефолт из кода.
+     * Реквизиты organization_LE_INN / organization_LE_KPP всегда ставятся сразу после
+     * organization_LE (вырезаются из любого другого места, добавляются, если их нет) —
+     * чтобы в ответе интеграции ИНН/КПП шли за юр. лицом, а не хвостом в конце JSON.
+     * organization_LE в схеме нет — схема возвращается как есть (без ЮЛ реквизиты не заполняются).
      */
     public Map<String, Object> schema() {
         String raw = ctrlRaw(CTRL_KEY_SCHEMA);
         if (raw == null) raw = DEFAULT_SCHEMA;
+        Map<String, Object> schema;
         try {
-            return JSON.readValue(raw, Map.class);
+            schema = JSON.readValue(raw, Map.class);
         } catch (Exception e) {
             if (!warned) {
                 log.warn("rag_control: extract_json_schema не разобран ({}), используется дефолт из кода",
                         e.getMessage());
                 warned = true;
             }
-            return JSON.readValue(DEFAULT_SCHEMA, Map.class);
+            schema = defaultSchema();
         }
+        return withOrgRequisites(schema);
+    }
+
+    /** Дефолт из кода; парсинг всегда успешен (литерал), но читаем одинаково. */
+    private Map<String, Object> defaultSchema() {
+        return JSON.readValue(DEFAULT_SCHEMA, Map.class);
+    }
+
+    /** Пересборка схемы: org → INN → KPP подряд, в каноническом написании ключей. */
+    private static Map<String, Object> withOrgRequisites(Map<String, Object> schema) {
+        if (!hasKey(schema, ExtractDirectory.KEY_ORG)) return schema;
+        Object innHint = hintOf(schema, ExtractDirectory.KEY_INN);
+        Object kppHint = hintOf(schema, ExtractDirectory.KEY_KPP);
+        Map<String, Object> out = new LinkedHashMap<>(schema.size() + 2);
+        for (Map.Entry<String, Object> e : schema.entrySet()) {
+            String k = e.getKey();
+            if (k.equalsIgnoreCase(ExtractDirectory.KEY_INN) || k.equalsIgnoreCase(ExtractDirectory.KEY_KPP)) {
+                continue;                       // вырежем и вставим после organization_LE
+            }
+            out.put(k, e.getValue());
+            if (k.equalsIgnoreCase(ExtractDirectory.KEY_ORG)) {
+                out.put(ExtractDirectory.KEY_INN, innHint);
+                out.put(ExtractDirectory.KEY_KPP, kppHint);
+            }
+        }
+        return out;
+    }
+
+    private static boolean hasKey(Map<String, Object> schema, String name) {
+        for (String k : schema.keySet()) {
+            if (k.equalsIgnoreCase(name)) return true;
+        }
+        return false;
+    }
+
+    /** Подсказка ключа из схемы (сохраняем при переносе); нет — стандартная REQ_HINT. */
+    private static Object hintOf(Map<String, Object> schema, String name) {
+        for (Map.Entry<String, Object> e : schema.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(name)) return e.getValue();
+        }
+        return REQ_HINT;
     }
 
     private void seedOne(String key, String value) {

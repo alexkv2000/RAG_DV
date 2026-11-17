@@ -202,6 +202,7 @@
         <div class="mono" style="font-size:11px;color:#8a94a8;margin-bottom:4px">Текущая схема
             (rag_control: extract_json_schema; правка — вкладка «Промты»):</div>
         <div id="extFields">—</div>
+        <div id="extDicts" class="mono" style="font-size:11px;color:#8a94a8;margin:2px 0 4px">справочники: загружаю…</div>
         <div class="arow">
             <input type="file" id="extFile" accept=".doc,.docx,.pdf,.rtf,.txt"
                    style="flex:1;min-width:230px;padding:7px;border:1px solid #ccc;border-radius:6px;background:#fff">
@@ -252,7 +253,7 @@
 </div>
 
 <script>
-    console.info('RAG UI v4.7 — админ-панель и промты открываются только ссылкой с ?adminPanel=1');
+    console.info('RAG UI v4.8 — админ-панель и промты открываются только ссылкой с ?adminPanel=1');
     const sid = localStorage.getItem('ragSid') || crypto.randomUUID();
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
@@ -835,9 +836,11 @@
     }
 
     $('btnFiles').onclick = loadFiles;
+
     /* ---- извлечение реквизитов: схема + тест на файле (админка и «Промты») ---- */
     async function loadExtFields(el) {
         if (!el) return;
+        loadExtDicts();               // справочники — независимо от судьбы схемы, параллельно с ней
         try {
             const j = await api('/api/rag/extract/schema');
             const keys = Object.keys(j);
@@ -851,7 +854,18 @@
             el.innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
         }
     }
-
+    async function loadExtDicts() {
+        const dEl = $('extDicts');
+        if (!dEl) return;
+        try {
+            const d = await api('/api/rag/extract/dictionaries');
+            dEl.textContent = 'Справочники проверки (кэш 10 мин): виды ' + d.kinds + ' · типы '
+                + d.types + ' · юр. лица ' + d.les + ' · загружены '
+                + (d.refreshedAt ? new Date(d.refreshedAt).toLocaleTimeString('ru-RU') : '—');
+        } catch (e) {
+            dEl.textContent = '⚠ справочники: ' + e.message;
+        }
+    }
     /** Валидация схемы: JSON-объект {поле: подсказка}, не массив/скаляр, не пустой. */
     function schemaCheck(v) {
         try {

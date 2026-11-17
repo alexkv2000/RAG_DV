@@ -1,5 +1,6 @@
 package kvo.itsnn.rag.web;
 
+import kvo.itsnn.rag.extract.ExtractDirectory;
 import kvo.itsnn.rag.extract.ExtractService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -13,9 +14,10 @@ import java.util.Map;
 public class ExtractController {
 
     private final ExtractService extract;
-
-    public ExtractController(ExtractService extract) {
+    private final ExtractDirectory directory;
+    public ExtractController(ExtractService extract, ExtractDirectory directory) {
         this.extract = extract;
+        this.directory = directory;
     }
 
     /**
@@ -39,5 +41,11 @@ public class ExtractController {
     @GetMapping("/extract/schema")
     public Map<String, Object> schema() {
         return extract.schema();
+    }
+
+    /** Размеры справочников и время загрузки кэша (админ-панель). */
+    @GetMapping("/extract/dictionaries")
+    public Map<String, Object> dictionaries() {
+        return directory.stats();
     }
 }

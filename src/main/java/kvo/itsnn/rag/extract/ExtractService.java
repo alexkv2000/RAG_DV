@@ -15,6 +15,9 @@ import java.util.*;
  * Интеграция «файл → JSON»: текст тем же TextExtractor'ом, что и индексация
  * (pdf без текстового слоя автоматически уходит в OCR), затем LLM заполняет
  * поля схемы из rag_control. Ответ — Map по схеме: отсутствующие поля = "".
+ * После LLM значения сверяются со справочниками DocsVision (ExtractDirectory):
+ * вид/тип/юр.лицо → каноническое имя справочника или "" (нет совпадения);
+ * для organization_LE добавляются ИНН/КПП найденного юр. лица.
  */
 @Service
 public class ExtractService {
@@ -32,11 +35,14 @@ public class ExtractService {
     private final TextExtractor extractor;
     private final LlmClient llm;
     private final ExtractPromptProvider prompts;
+    private final ExtractDirectory directory;
 
-    public ExtractService(TextExtractor extractor, LlmClient llm, ExtractPromptProvider prompts) {
+    public ExtractService(TextExtractor extractor, LlmClient llm,
+                          ExtractPromptProvider prompts, ExtractDirectory directory) {
         this.extractor = extractor;
         this.llm = llm;
         this.prompts = prompts;
+        this.directory = directory;
         log.info("ExtractService: форматы={}, лимит файла {} МБ, лимит текста {} симв.",
                 ALLOWED_EXT, MAX_FILE_BYTES / 1024 / 1024, MAX_TEXT_CHARS);
     }
@@ -62,12 +68,105 @@ public class ExtractService {
                 LlmClient.Message.user(user)));
         log.info("EXTRACT: '{}', {} симв. текста, полей={}, LLM {} мс",
                 fileName, text.length(), schema.size(), System.currentTimeMillis() - t0);
-        return merge(schema.keySet(), answer);
+        return validate(fileName, merge(schema.keySet(), answer));
     }
 
     /** Текущая схема для интеграторов (GET /api/rag/extract/schema). */
     public Map<String, Object> schema() {
         return prompts.schema();
+    }
+
+    /* ---------- сверка со справочниками ---------- */
+
+    /**
+     * Вид/тип — по справочникам: совпадение → каноническое имя, нет → "".
+     * Юр. лицо группы и контрагент разводим по справочнику ЮЛ (dvtable_{7473f07f-…}):
+     * найдено в справочнике → предприятие группы → organization_LE (+ ИНН/КПП),
+     * не найдено → контрагент → contragent. LLM часто путает эти поля — раскладываем по местам.
+     * Справочник не прочитан — значения остаются как вернула LLM (проверку пропускаем).
+     */
+    private Map<String, String> validate(String fileName, Map<String, String> out) {
+        if (!directory.available()) return out;
+        int matched = 0, cleared = 0, moved = 0;
+        String kKind = findKey(out, ExtractDirectory.KEY_KIND);
+        int[] a = align(out, kKind, directory.kindOf(val(out, kKind)));
+        matched += a[0];
+        cleared += a[1];
+        String kType = findKey(out, ExtractDirectory.KEY_TYPE);
+        a = align(out, kType, directory.typeOf(val(out, kType)));
+        matched += a[0];
+        cleared += a[1];
+        String kOrg = findKey(out, ExtractDirectory.KEY_ORG);
+        String kCon = findKey(out, ExtractDirectory.KEY_CONTRAGENT);
+        if (kOrg != null) {
+            String orgVal = nz(out.get(kOrg));
+            String conVal = kCon == null ? "" : nz(out.get(kCon));
+            ExtractDirectory.Le le = directory.leOf(orgVal);          // org — наше ЮЛ?
+            if (le == null) {
+                ExtractDirectory.Le leCon = directory.leOf(conVal);   // контрагент — наше ЮЛ?
+                if (leCon != null) {
+                    // поля перепутаны местами: наш ЮЛ стоит в contragent,
+                    // внешняя организация — в organization_LE. Меняем местами.
+                    out.put(kOrg, leCon.name());
+                    out.put(kCon, orgVal);          // старое значение — в контрагенты (может стать "")
+                    le = leCon;
+                    moved++;
+                } else if (!orgVal.isEmpty()) {
+                    // в ЮЛ записан контрагент: переносим в contragent (если там пусто), ЮЛ очищаем
+                    if (kCon != null && conVal.isEmpty()) {
+                        out.put(kCon, orgVal);
+                        moved++;
+                    }
+                    out.put(kOrg, "");
+                    cleared++;
+                }
+            } else if (kCon != null && le.equals(directory.leOf(conVal))) {
+                out.put(kCon, "");                  // контрагент дублирует наше же ЮЛ
+                cleared++;
+            }
+            String kInn = keyOrNew(out, ExtractDirectory.KEY_INN);
+            String kKpp = keyOrNew(out, ExtractDirectory.KEY_KPP);
+            out.put(kInn, le == null ? "" : le.inn());
+            out.put(kKpp, le == null ? "" : le.kpp());
+        }
+        log.info("EXTRACT-DICT '{}': подтверждено/исправлено {}, очищено {}, переставлено {}",
+                fileName, matched, cleared, moved);
+        return out;
+    }
+
+    private static String nz(String s) {
+        return s == null ? "" : s.strip();
+    }
+    /** Сверка одного поля: canonical==null → очистить; иначе подставить. [matched, cleared]. */
+    private static int[] align(Map<String, String> out, String key, String canonical) {
+        if (key == null) return new int[]{0, 0};
+        String cur = out.get(key);
+        if (cur == null || cur.isBlank()) return new int[]{0, 0};
+        if (canonical == null) {
+            out.put(key, "");
+            return new int[]{0, 1};
+        }
+        out.put(key, canonical);
+        return canonical.equals(cur) ? new int[]{0, 0} : new int[]{1, 0};
+    }
+
+    /** Существующий ключ (без учёта регистра) или новый с пустым значением. */
+    private static String keyOrNew(Map<String, String> out, String name) {
+        String k = findKey(out, name);
+        if (k != null) return k;
+        out.put(name, "");
+        return name;
+    }
+
+    private static String findKey(Map<String, String> out, String name) {
+        for (String k : out.keySet()) {
+            if (k.equalsIgnoreCase(name)) return k;
+        }
+        return null;
+    }
+
+    private static String val(Map<String, String> out, String key) {
+        return key == null ? null : out.get(key);
     }
 
     /* ---------- внутреннее ---------- */
