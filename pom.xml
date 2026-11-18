@@ -96,6 +96,13 @@
             <artifactId>onnxruntime-native-auto</artifactId>
             <version>1.3.0</version>
         </dependency>
+        <!-- Реранкер: Java API ONNX Runtime (классы ai.onnxruntime.*) + CPU-нативы в jar;
+             onnxruntime-native-auto выше — агрегатор нативов DJL, оставлен как запасной -->
+        <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+            <version>1.20.0</version>
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>

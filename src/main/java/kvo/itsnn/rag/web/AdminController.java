@@ -8,6 +8,7 @@ import kvo.itsnn.rag.ingest.Embedder;
 import kvo.itsnn.rag.llm.LlmClient;
 import kvo.itsnn.rag.refsync.RagScheduler;
 import kvo.itsnn.rag.refsync.RefRepository;
+import kvo.itsnn.rag.rerank.Reranker;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import kvo.itsnn.rag.index.VectorIndex;
@@ -35,6 +36,7 @@ public class AdminController {
     private static final String MS = "ms";
     private static final tools.jackson.databind.ObjectMapper JSON =
             tools.jackson.databind.json.JsonMapper.builder().build();
+    private final Reranker reranker;
 
     /** Вкладка «Промты»: редактируемые system-промпты (ключ rag_control → подпись). */
     private record PromptDef(String key, String title) {}
@@ -54,9 +56,10 @@ public class AdminController {
     private final RagProperties props;
     private final RagScheduler scheduler;
 
-    public AdminController(RefRepository refs, VectorIndex index,
+    public AdminController(Reranker reranker, RefRepository refs, VectorIndex index,
                            JdbcTemplate jdbc, Embedder embedder,
                            LlmClient llm, RagProperties props, RagScheduler scheduler) {
+        this.reranker = reranker;
         this.refs = refs;
         this.index = index;
         this.jdbc = jdbc;
@@ -64,6 +67,29 @@ public class AdminController {
         this.llm = llm;
         this.props = props;
         this.scheduler = scheduler;
+    }
+
+    /** Самопроверка реранкера: скоринг релевантной и нерелевантной пары. */
+    @GetMapping("/rerank-selftest")
+    public Map<String, Object> rerankSelftest() {
+        long t0 = System.currentTimeMillis();
+        if (!reranker.enabled()) {
+            return Map.of(OK, false, "enabled", false, MODEL, "-",
+                    ERROR, "реранкер выключен (rag.rerank.enabled=false)", MS, 0);
+        }
+        try {
+            List<Double> s = reranker.score("Чем отличается версия 6.0 от 4.0?", List.of(
+                    "В версии 6.0 добавлен раздел «Требования охраны труда», в версии 4.0 его нет.",
+                    "Погода в мае была тёплой, дожди прошли в конце месяца."));
+            return Map.of(OK, true, "enabled", true, MODEL, reranker.model(),
+                    "answer", String.format(Locale.ROOT,
+                            "скор: %.3f / %.3f (релевантный фрагмент должен быть заметно выше)",
+                            s.get(0), s.get(1)),
+                    MS, System.currentTimeMillis() - t0);
+        } catch (Exception e) {
+            return Map.of(OK, false, "enabled", true, MODEL, String.valueOf(reranker.model()),
+                    ERROR, String.valueOf(e.getMessage()), MS, System.currentTimeMillis() - t0);
+        }
     }
 
     @GetMapping("/stats")

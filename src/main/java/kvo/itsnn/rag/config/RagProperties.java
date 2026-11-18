@@ -21,9 +21,21 @@ public record RagProperties(
         @DefaultValue Chunk chunk,
         Embedding embedding,
         @DefaultValue Chroma chroma,
+        Rerank rerank,
         @DefaultValue Ocr ocr,
         Content content,
         @DefaultValue Ui ui) {
+
+
+    /** Реранк кандидатов после Chroma: кросс-энкодер (bge-reranker-v2-m3) в ONNX на CPU. */
+    public record Rerank(
+            @DefaultValue("false") boolean enabled,
+            String model,                         // имя для логов, напр. BAAI/bge-reranker-v2-m3
+            String path,                          // папка с model.onnx (или onnx/model.onnx) + tokenizer.json
+            @DefaultValue("512")  int maxTokens,  // обрезка пары «вопрос+фрагмент»
+            @DefaultValue("8")    int batch,      // пар за один прогон ONNX Runtime
+            @DefaultValue("32")   int passages,   // сколько верхних кандидатов реранчить за волну
+            @DefaultValue("0.05") double minScore) {}   // 0 — фильтр выключен) {}
 
     // было 1200/200 — снижено из-за лимита 512 токенов у модели
     public record Chunk(@DefaultValue("400") int targetChars,

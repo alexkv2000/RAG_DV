@@ -1,0 +1,82 @@
+server:
+  address: 0.0.0.0
+  tomcat:
+    max-part-header-size: 8KB # снимает ограничение размера заголовка файла для /api/rag/extract
+spring:
+  servlet:
+    multipart:            # Spring Boot 4.x — свойство здесь
+      max-file-size: 64MB
+      max-request-size: 64MB
+  application.name: rag-indexer
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true    # всегда сверять с сервером (ETag/304), не брать из кэша вслепую
+  datasource:
+    url: jdbc:sqlserver://docprod\\sqlprod:1433;databaseName=GAZ;encrypt=true;trustServerCertificate=true;packetSize=32767
+    username: DVSQL
+    password: ${DB_PASSWORD}
+rag:
+  rerank: # стадия-2 поиска: кросс-энкодер переупорядочивает кандидатов Chroma
+    enabled: true               # false - включить после скачивания модели - true (readmy.txt, раздел «Реранкер»)
+    model: BAAI/bge-reranker-v2-m3
+    path: C:\models\bge-reranker-v2-m3   # model.onnx (или onnx\model.onnx) + tokenizer.json
+    max-tokens: 512
+    batch: 8                     # пар «вопрос, фрагмент» за один прогон ONNX (память/скорость)
+    passages: 16                 # Default - 32. сколько верхних кандидатов реранчить
+    min-score: 0.05        # < 0.05 — мусор: не идёт ни в контекст, ни в источники
+  ui:
+    doc-card-url: https://sdo.gaz.ru/DocsvisionWebClient/#/CardView/211CAF82-2949-4861-B4D0-238D373F951C?FileId=
+  #poll-interval: 15s
+  #ingest-batch-day: 1
+  #ingest-batch-night: 16
+  #night-start: "23:00"
+  #night-end: "05:00"
+  #day-hour-limit: 60
+  chunk:
+    target-chars: 650      # Было 400 (мах 700 дальше будет резать вектор) (лимит 512 токенов модели)
+    overlap-chars: 80
+  embedding:
+    local-model: intfloat/multilingual-e5-small
+    local-path: C:\models\multilingual-e5-small
+    passage-prefix: "passage: "
+    query-prefix: "query: "
+    dims: 384
+    batch: 16 # для ПРОД - 64
+  chroma:
+    base-url: http://localhost:8000
+    collection: rag_chunks
+  ocr:
+    enabled: true        # включить после установки tessdata
+    lang: rus+eng
+    dpi: 200
+    max-pages: 30
+    data-path: C:/tessdata/
+  llm:
+    base-url: https://ai.loodsen.ru/api/v1 #https://ai.loodsen.ru/api/v1/chat/completions
+    api-key: ${LOODSEN_API_KEY}
+    model: Qwen3.8-27B
+    temperature: 0.2
+    max-tokens: 4096
+    timeout-seconds: 300
+    history-turns: 3
+    context-chunks: 10 #было 6 Проверка ёмкости: 10 чанков × ≤1200 симв. = 12 000 ≤ MAX_CONTEXT_CHARS (15 000) — влезает. n_results=40 для ChromaDB — нормально.
+    candidate-chunks: 40 #было 24
+    disable-thinking: true
+    compare-enabled: true        # false — полностью выключить сценарий сравнения
+    compare-chunks-per-side: 8   # фрагментов на каждую версию (бюджет 15 000 симв. режет лишнее сам)
+  content:
+    roots: # имя стора (dvsys_binary_storages.Name)
+      # NTFS-стор: имя → корень шары
+      OfficeWork: '\\gaz\docsvision\DVStream\OfficeWork'
+      # архивные БД: имя → JDBC-URL
+      Archive_2019: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2019;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2020: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2020;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2021: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2021;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2022: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2022;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2023: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2023;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2024: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2024;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+logging:
+  level:
+    kvo.itsnn.rag: INFO

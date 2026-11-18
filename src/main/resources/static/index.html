@@ -102,9 +102,16 @@
     .pkey{font-family:Consolas,"Courier New",monospace;font-size:11px;color:#8a94a8}
     .pstat{font-size:12px;color:#8a94a8;margin-top:4px}
     .pstat.err{color:#b91c1c}
+
+    /* ===== eval ===== */
+    #evalHistory tr[data-run]{cursor:pointer}
+    #evalHistory tr[data-run]:hover{background:#f6f8fc}
+    #evalHistory tr.sel{background:#e3edff}
+    .delta-up{color:#15803d;font-weight:600}
+    .delta-down{color:#b91c1c;font-weight:600}
 </style></head><body>
 <div id="top">
-    <h3>Чат по базе знаний <span class="ver">v5.0</span></h3>
+    <h3>Чат по базе знаний <span class="ver">v5.1</span></h3>
     <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
 </div>
 
@@ -192,8 +199,32 @@
         <div class="arow">
             <button type="button" id="btnSelf">Эмбеддер</button>
             <button type="button" id="btnLlm" title="Ответ LLM может занять до пары минут">LLM</button>
+            <button type="button" id="btnRerank" title="Кросс-энкодер bge-reranker (ONNX, CPU): реранк кандидатов после Chroma">Реранкер</button>
         </div>
         <div id="selfOut" class="mono">Нажмите кнопку — результат появится здесь.</div>
+    </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Качество поиска (eval)</b>
+            <button type="button" class="sm" id="btnEvalRefresh">⟳ Обновить</button></div>
+        <div class="mono" style="font-size:11.5px;color:#8a94a8">Вопросы из dbo.rag_eval_question идут полным путём
+            поиска (embed → Chroma → реранк → дедуп) без вызова LLM; метрика — recall: попал ли ожидаемый файл
+            в выдачу (ранг = позиция в выдаче). Запускать после каждого изменения: chunk size, реранк, min-score,
+            промпты. Клик по строке истории — детали того прогона; Δ — сравнение с предыдущим прогоном.</div>
+        <div id="evalLast" class="mono" style="margin-top:6px">—</div>
+        <div class="arow">
+            <input id="evalLabel" placeholder="Метка прогона — что изменили (напр. «rerank off»)" autocomplete="off">
+            <button type="button" class="gray" id="btnEvalRun">▶ Прогнать</button>
+        </div>
+        <div id="evalRows"></div>
+        <div class="arow">
+            <input id="eqQuestion" placeholder="Новый вопрос" autocomplete="off"
+                   title="Текст, как его задал бы пользователь">
+            <input id="eqFiles" placeholder="Ожидаемые файлы через ;" autocomplete="off"
+                   title="Достаточно узнаваемого фрагмента имени; classifier и expect_must задаются в БД">
+            <button type="button" class="gray" id="btnEvalAdd">＋ Добавить</button>
+        </div>
+        <div id="evalHistory"></div>
     </div>
 
     <div class="acard">
@@ -253,7 +284,7 @@
 </div>
 
 <script>
-    console.info('RAG UI v5.0 — возможность устанавливать ПО на серверах по http протоколу');
+    console.info('RAG UI v5.1 — eval качества поиска (golden-вопросы, recall, история прогонов)');
     /* crypto.randomUUID() есть только в secure context (https/localhost);
        на http://w17-051911:8080 его нет — скрипт падал на этой строке. */
     function uuid() {
@@ -547,7 +578,7 @@
             $(v.view).hidden = k !== name;
         }
         if (name === 'admin' && !adminInit) {
-            adminInit = true; loadStats(); loadErrors(); loadFiles(); loadNight(); loadSettings();
+            adminInit = true; loadStats(); loadErrors(); loadFiles(); loadNight(); loadSettings(); loadEval();
             loadExtFields($('extFields'));
         }
         if (name === 'prompts' && !promptsInit) {
@@ -670,7 +701,7 @@
         try {
             const j = await api('/api/rag/admin/nightly-check', {method: 'POST'});
             out(j.result === 'busy'
-                ? '⏳ Сверка уже выполняется (ночный прогон?) — результат появится по завершении'
+                ? '⏳ Сверка уже выполняется (ночной прогон?) — результат появится по завершении'
                 : '✓ Сверка выполнена');
             loadStats();   // обновит и бейджи, и строку «Последняя сверка» (renderNightly внутри)
         } catch (e) {
@@ -795,6 +826,144 @@
 
     $('btnSelf').onclick = e => runSelf('/api/rag/admin/selftest', 'Эмбеддер', e.target);
     $('btnLlm').onclick = e => runSelf('/api/rag/admin/llm-selftest', 'LLM', e.target);
+    $('btnRerank').onclick = e => runSelf('/api/rag/admin/rerank-selftest', 'Реранкер', e.target);
+
+    /* ---- eval: качество поиска по golden-вопросам (dbo.rag_eval_question) ---- */
+    async function loadEval() {
+        const el = $('evalLast');
+        el.textContent = 'загружаю…';
+        const [runs, qs] = await Promise.all([
+            api('/api/rag/admin/eval/runs').catch(() => null),
+            api('/api/rag/admin/eval/questions').catch(() => null)
+        ]);
+        if (!runs && !qs) {
+            el.innerHTML = '<span class="mono bad">⚠ eval-эндпоинты недоступны (классы EvalService/EvalController на месте?)</span>';
+            return;
+        }
+        renderEvalHistory(Array.isArray(runs) ? runs : []);
+        const n = Array.isArray(qs) ? qs.length : 0;
+        el.innerHTML = (Array.isArray(runs) && runs.length)
+            ? evalSummary(runs[0]) + ' · вопросов в наборе: ' + n
+            : 'Прогонов ещё не было · вопросов в наборе: ' + n
+            + (n ? ' — нажмите «Прогнать»' : ' — добавьте вопросы (ниже) и нажмите «Прогнать»');
+    }
+
+    function evalSummary(r) {
+        const pct = Math.round((r.recall ?? 0) * 100);
+        return 'Прогон #' + r.runId + ' (' + new Date(r.at).toLocaleString('ru-RU') + ')'
+            + (r.label ? ' — «' + esc(String(r.label)) + '»' : '')
+            + ': <b style="color:' + (pct >= 80 ? '#15803d' : pct >= 50 ? '#b45309' : '#b91c1c') + '">'
+            + 'recall ' + pct + '%</b> · файлов ' + r.found + '/' + r.expected
+            + ' · вопросов целиком ' + r.fullPass + '/' + r.questions
+            + (r.mustFail ? ' · must не прошёл: ' + r.mustFail : '')
+            + ' · ' + r.ms + ' мс';
+    }
+
+    /** Δ recall (процентные пункты) к предыдущему прогону: список от API — по убыванию run_id. */
+    function evalDelta(row, older) {
+        if (!older) return '<span style="color:#8a94a8">—</span>';
+        const d = Math.round(((row.recall ?? 0) - (older.recall ?? 0)) * 100);
+        if (d === 0) return '<span style="color:#8a94a8">0</span>';
+        return d > 0
+            ? '<span class="delta-up">+' + d + '</span>'
+            : '<span class="delta-down">' + d + '</span>';
+    }
+
+    function renderEvalHistory(list) {
+        const el = $('evalHistory');
+        if (!Array.isArray(list) || !list.length) { el.innerHTML = ''; return; }
+        let h = '<table class="tbl"><tr><th>#</th><th>когда</th><th>метка</th><th>recall</th>'
+            + '<th title="Изменение recall к предыдущему прогону, процентные пункты">Δ</th>'
+            + '<th>файлы</th><th>целиком</th><th>мс</th></tr>';
+        list.forEach((r, i) => {
+            h += '<tr data-run="' + r.runId + '" title="Показать детали прогона #' + r.runId + '">'
+                + '<td class="mono">' + r.runId + '</td>'
+                + '<td class="mono">' + new Date(r.at).toLocaleString('ru-RU') + '</td>'
+                + '<td>' + esc(String(r.label || '')) + '</td>'
+                + '<td><b>' + Math.round((r.recall ?? 0) * 100) + '%</b></td>'
+                + '<td>' + evalDelta(r, list[i + 1]) + '</td>'
+                + '<td>' + r.found + '/' + r.expected + '</td>'
+                + '<td>' + r.fullPass + '/' + r.questions + '</td>'
+                + '<td class="mono">' + r.ms + '</td></tr>';
+        });
+        el.innerHTML = h + '</table>';
+        el.querySelectorAll('tr[data-run]').forEach(tr => {
+            tr.onclick = async () => {
+                el.querySelectorAll('tr').forEach(x => x.classList.remove('sel'));
+                tr.classList.add('sel');
+                $('evalRows').innerHTML = '<div class="mono">загружаю детали прогона #' + tr.dataset.run + '…</div>';
+                try {
+                    const j = await api('/api/rag/admin/eval/runs/' + tr.dataset.run);
+                    renderEvalDetails(j.details, 'Прогон #' + tr.dataset.run);
+                } catch (e) {
+                    $('evalRows').innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
+                }
+            };
+        });
+    }
+
+    /** Таблица по-вопросно; title — подпись над таблицей (какой прогон показан). */
+    function renderEvalDetails(rows, title) {
+        const el = $('evalRows');
+        if (!Array.isArray(rows) || !rows.length) { el.innerHTML = ''; return; }
+        let h = title ? '<div class="mono" style="margin:4px 0 2px;color:#8a94a8">' + esc(title) + '</div>' : '';
+        h += '<table class="tbl"><tr><th>вопрос</th><th>найдено</th><th>ранги</th><th>must</th><th>мс</th></tr>';
+        for (const r of rows) {
+            const ok = r.ok === true;
+            const ranks = (r.ranks || [])
+                .map(x => x.file + ': ' + (x.rank > 0 ? '#' + x.rank : '—')).join('; ');
+            h += '<tr><td' + (ok ? '' : ' style="color:#b91c1c"') + '>'
+                + esc(String(r.question || ''))
+                + (r.classifier ? ' <span style="color:#8a94a8">[' + esc(String(r.classifier)) + ']</span>' : '')
+                + '</td><td>' + r.found + '/' + r.expected + '</td>'
+                + '<td style="font-size:11.5px">' + esc(ranks) + '</td>'
+                + '<td>' + (r.mustOk === false ? '⚠' : '✓') + '</td>'
+                + '<td class="mono">' + r.ms + '</td></tr>';
+        }
+        el.innerHTML = h + '</table>';
+    }
+
+    $('btnEvalRefresh').onclick = loadEval;
+
+    $('btnEvalRun').onclick = async () => {
+        const b = $('btnEvalRun'), t = b.textContent;
+        b.disabled = true;
+        b.textContent = '…прогоняю…';
+        $('evalLast').textContent = '⏳ Идёт прогон: вопросы идут полным путём поиска (без LLM; с реранкером ~1–2 с на вопрос).';
+        try {
+            const j = await api('/api/rag/admin/eval/run', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({label: $('evalLabel').value.trim()})
+            });
+            $('evalLast').innerHTML = '✓ ' + evalSummary(Object.assign({}, j, {at: new Date().toISOString()}));
+            renderEvalDetails(j.details, 'Только что — прогон #' + (j.result === 'done' ? 'новый' : ''));
+            loadEval();
+        } catch (e) {
+            $('evalLast').innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
+        }
+        b.disabled = false;
+        b.textContent = t;
+    };
+
+    $('btnEvalAdd').onclick = async () => {
+        const q = $('eqQuestion').value.trim();
+        const f = $('eqFiles').value.trim();
+        if (!q || !f) {
+            $('evalLast').innerHTML = '<span class="mono bad">⚠ нужен вопрос и хотя бы один ожидаемый файл</span>';
+            return;
+        }
+        try {
+            const j = await api('/api/rag/admin/eval/questions', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({question: q, expectFiles: f})
+            });
+            $('eqQuestion').value = '';
+            $('eqFiles').value = '';
+            $('evalLast').innerHTML = '✓ Вопрос #' + j.questionId + ' добавлен — нажмите «Прогнать»';
+        } catch (e) {
+            $('evalLast').innerHTML = '<span class="mono bad">⚠ ' + esc(e.message) + '</span>';
+        }
+    };
 
     /* ---- последние ошибки индексации ---- */
     async function loadErrors() {
