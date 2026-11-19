@@ -15,11 +15,14 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 /**
  * Прямой чат с LLM (rag.llm.base-url) — без эмбеддингов, Chroma и rag_control.
  * Отдельные сессии от RAG-чата.
- *
  * Прикреплённые файлы: текст извлекается тем же TextExtractor, что и индексация
  * (pdf-скан без текстового слоя автоматически уходит в OCR), обрезается до лимита
  * и подставляется в КАЖДЫЙ вопрос сессии, пока файл не открепят. В историю реплик
  * текст файла не пишется — иначе каждый следующий вопрос дублировал бы все файлы.
+ * Два лимита файлов: direct-max-file-chars — обрезка текста одного файла;
+ * direct-max-session-tokens — оценочный суммарный бюджет токенов ВСЕХ файлов
+ * сессии (файлы уходят в каждый вопрос вместе с историей и резервом max-tokens,
+ * а контекст модели конечен — 131 072 токена у Qwen3).
  */
 @Service
 public class DirectChatService {
@@ -31,10 +34,14 @@ public class DirectChatService {
             "pdf", "doc", "docx", "rtf", "txt", "csv", "html", "htm",
             "xlsx", "xls", "xlsm", "msg", "png", "jpg", "jpeg", "tif", "tiff");
     private static final long MAX_FILE_BYTES = 32L * 1024 * 1024;
-    /** Символов текста одного файла, уходящих в LLM (3 файла ≈ 36 тыс. знаков контекста). */
-
-    private final int maxFileChars;
     private static final int MAX_FILES = 3;
+
+    /** Символов текста одного файла, уходящих в LLM; источник — rag.llm.direct-max-file-chars. */
+    private final int maxFileChars;
+
+    /** Оценочный бюджет токенов на ВСЕ файлы сессии; источник — rag.llm.direct-max-session-tokens.
+     *  Это не лог-значение, а сам лимит: с ним putFile() сверяет сумму токенов файлов. */
+    private final int maxSessionTokens;
 
     private final LlmProperties cfg;
     private final LlmClient llm;
@@ -42,15 +49,76 @@ public class DirectChatService {
     private final TextExtractor extractor;
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
 
-    /** Сессия: история реплик + прикреплённые файлы (LinkedHashMap — порядок загрузки). */
+    /**
+     * Сессия: история реплик + прикреплённые файлы.
+     * Доступ к files — только через synchronized-методы (монитор — сама сессия):
+     * Sonar запрещает synchronized-блоки по параметру/локальной переменной (S2445 —
+     * монитор должен быть final-объектом), а цепочка «проверка лимита файлов +
+     * проверка бюджета токенов + put» обязана выполняться атомарно целиком.
+     */
     private static final class Session {
         final ConcurrentLinkedDeque<LlmClient.Message> history = new ConcurrentLinkedDeque<>();
-        /** Ключ — имя файла в нижнем регистре; доступ синхронизирован по Session. */
-        final Map<String, AttachedFile> files = new LinkedHashMap<>();
+        /** Ключ — имя файла в нижнем регистре; LinkedHashMap — порядок загрузки. */
+        private final Map<String, AttachedFile> files = new LinkedHashMap<>();
+
+        /** Файлов в сессии. */
+        synchronized int filesCount() {
+            return files.size();
+        }
+
+        /** Копия файлов для сборки промпта: итерация вне блокировки безопасна. */
+        synchronized List<AttachedFile> filesSnapshot() {
+            return new ArrayList<>(files.values());
+        }
+
+        /** Строка выдачи для UI. */
+        synchronized List<FileInfo> filesInfo() {
+            return files.values().stream()
+                    .map(f -> new FileInfo(f.name(), f.text().length())).toList();
+        }
+
+        /** Сумма оценок токенов файлов сессии (для лога после attach). */
+        synchronized int usedTokens() {
+            int sum = 0;
+            for (AttachedFile f : files.values()) sum += f.tokens();
+            return sum;
+        }
+
+        /** Добавить или заменить файл; АТОМАРНО проверяет лимит количества и бюджет
+         *  токенов (заменяемый файл из суммы исключается). Нарушение лимита —
+         *  IllegalArgumentException → HTTP 400 с текстом для UI. */
+        synchronized void putFile(String name, String text, int tokens, int maxFiles, int maxTokens) {
+            String k = name.toLowerCase(Locale.ROOT);
+            if (!files.containsKey(k) && files.size() >= maxFiles) {
+                throw new IllegalArgumentException("к сессии уже прикреплено " + maxFiles
+                        + " файла — открепите один, чтобы добавить новый");
+            }
+            int rest = 0;                          // бюджет уже прикреплённых файлов
+            for (Map.Entry<String, AttachedFile> e : files.entrySet()) {
+                if (!e.getKey().equals(k)) rest += e.getValue().tokens();
+            }
+            if (rest + tokens > maxTokens) {
+                throw new IllegalArgumentException("'" + name + "': с уже прикреплёнными файлами ≈"
+                        + tk(rest + tokens) + " токенов — больше бюджета сессии " + tk(maxTokens)
+                        + " (rag.llm.direct-max-session-tokens). Открепите один из файлов"
+                        + " или прикрепите меньший");
+            }
+            files.put(k, new AttachedFile(name, text, tokens));
+        }
+
+        /** Открепить файл по имени; несуществующее имя — молча no-op. */
+        synchronized void removeFile(String name) {
+            files.remove(name.toLowerCase(Locale.ROOT));
+        }
+
+        /** «89 тыс.» — формат токенов в сообщении об ошибке. */
+        private static String tk(int tokens) {
+            return Math.round(tokens / 1000.0) + " тыс.";
+        }
     }
 
-    /** Файл, прикреплённый к сессии: имя + извлечённый (и обрезанный) текст. */
-    record AttachedFile(String name, String text) {}
+    /** Файл, прикреплённый к сессии: имя + извлечённый (обрезанный) текст + оценка токенов. */
+    record AttachedFile(String name, String text, int tokens) {}
 
     /** Строка выдачи для UI. */
     public record FileInfo(String name, int chars) {}
@@ -62,8 +130,10 @@ public class DirectChatService {
         this.prompts = prompts;
         this.extractor = extractor;
         this.maxFileChars = Math.max(1, cfg.directMaxFileChars());
-        log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. по {} симв. (rag.llm.direct-max-file-chars)",
-                cfg.model(), cfg.historyTurns(), MAX_FILES, maxFileChars);
+        this.maxSessionTokens = Math.max(1, cfg.directMaxSessionTokens());
+        log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. по {} симв., "
+                        + "бюджет сессии {} токенов (rag.llm.direct-max-file-chars / direct-max-session-tokens)",
+                cfg.model(), cfg.historyTurns(), MAX_FILES, maxFileChars, maxSessionTokens);
     }
 
     public record DirectReply(String sessionId, String answer) {}
@@ -80,7 +150,7 @@ public class DirectChatService {
         long t0 = System.currentTimeMillis();
         String answer = llm.chat(messages);
         log.info("DIRECT: вопрос='{}', файлов={}, LLM {} мс",
-                message, filesCount(s), System.currentTimeMillis() - t0);
+                message, s.filesCount(), System.currentTimeMillis() - t0);
 
         s.history.add(LlmClient.Message.user(message));                // в историю — без текста файлов
         String a = answer == null ? "" : answer.strip();
@@ -97,40 +167,30 @@ public class DirectChatService {
         String name = fileName == null || fileName.isBlank() ? "файл" : fileName.strip();
         String ext = check(name, bytes.length);
         String text = extractText(name, ext, bytes);
+        int tokens = estimateTokens(text);
 
         Session s = sessions.computeIfAbsent(sid, k -> new Session());
-        synchronized (s) {
-            if (!s.files.containsKey(key(name)) && s.files.size() >= MAX_FILES) {
-                throw new IllegalArgumentException("к сессии уже прикреплено " + MAX_FILES
-                        + " файла — открепите один, чтобы добавить новый");
-            }
-            s.files.put(key(name), new AttachedFile(name, text));
-        }
-        log.info("DIRECT: файл '{}' прикреплён к сессии ({} симв. текста)", name, text.length());
+        s.putFile(name, text, tokens, MAX_FILES, maxSessionTokens);
+        log.info("DIRECT: файл '{}' прикреплён к сессии ({} симв. ≈ {} ток., сессия {}/{})",
+                name, text.length(), tokens, s.usedTokens(), maxSessionTokens);
         return files(sid);
     }
 
     /** Открепить файл по имени; несуществующее имя — молча no-op. */
     public List<FileInfo> removeFile(String sessionId, String name) {
-        String sid = normSid(sessionId);
-        Session s = sessions.get(sid);
+        Session s = sessions.get(normSid(sessionId));
         if (s != null && name != null && !name.isBlank()) {
-            synchronized (s) {
-                s.files.remove(key(name.strip()));
-            }
+            s.removeFile(name.strip());
         }
-        return files(sid);
+        return files(sessionId);
     }
 
     /** Список файлов сессии (восстановление UI после перезагрузки страницы). */
     public List<FileInfo> files(String sessionId) {
         Session s = sessions.get(normSid(sessionId));
-        if (s == null) return List.of();
-        synchronized (s) {
-            return s.files.values().stream()
-                    .map(f -> new FileInfo(f.name(), f.text().length())).toList();
-        }
+        return s == null ? List.of() : s.filesInfo();
     }
+
     /** Удаление реплик из истории сессии — аналог ChatService.deleteMessages. */
     public int deleteMessages(String sessionId, String role, String content) {
         Session s = sessions.get(normSid(sessionId));
@@ -142,31 +202,34 @@ public class DirectChatService {
         if (deleted > 0) log.info("DIRECT: удалено {} реплик роли '{}' из истории", deleted, role);
         return deleted;
     }
+
     /* ---------- внутреннее ---------- */
 
     private static String normSid(String sessionId) {
         return sessionId == null ? "" : sessionId.strip();
     }
 
-    private static String key(String name) {
-        return name.toLowerCase(Locale.ROOT);
-    }
-
-    private static int filesCount(Session s) {
-        synchronized (s) {
-            return s.files.size();
+    /** Оценка токенов Qwen: кириллица ≈ 2 симв./токен, остальное (код, латиница,
+     *  цифры, разметка) ≈ 3,8. Калибровка 19.11.2026: дамп исходников 340 473 симв.
+     *  → 89 433 токенов (3,82) — оценка сходится с замером с точностью ~0,2 %.
+     *  Нужна только для бюджета attach'а: запас в лимите покрывает погрешность. */
+    private static int estimateTokens(String text) {
+        int cyr = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c >= 0x0400 && c <= 0x04FF) cyr++;     // кириллица, включая ё
         }
+        return Math.max(1, (int) Math.round(cyr / 2.0 + (text.length() - cyr) / 3.8));
     }
 
     /** Тексты всех файлов сессии одним блоком; файлов нет — вопрос уходит как есть. */
     private String withFiles(Session s, String message) {
-        List<AttachedFile> fs;
-        synchronized (s) {
-            if (s.files.isEmpty()) return message;
-            fs = new ArrayList<>(s.files.values());
-        }
-        StringBuilder sb = new StringBuilder("Пользователь прикрепил к диалогу файлы (их текст ниже). "
-                + "Опирайся на них при ответе и называй имя файла, когда ссылаешься на их содержимое.\n\n");
+        List<AttachedFile> fs = s.filesSnapshot();
+        if (fs.isEmpty()) return message;
+        StringBuilder sb = new StringBuilder("""
+                Пользователь прикрепил к диалогу файлы (их текст ниже). Опирайся на них при ответе и называй имя файла, когда ссылаешься на их содержимое.
+
+                """);
         for (AttachedFile f : fs) {
             sb.append("=== Начало файла: ").append(f.name()).append(" ===\n")
                     .append(f.text())

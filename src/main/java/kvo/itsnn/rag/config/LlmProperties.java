@@ -18,6 +18,9 @@ public record LlmProperties(
         // === D: сценарий «сравнение версий одного документа» ===
         @DefaultValue("true") boolean compareEnabled,
         @DefaultValue("8") int compareChunksPerSide,
-        /** Лимит текста одного прикреплённого файла свободного чата, симв. */
-        @DefaultValue("120000") int directMaxFileChars) {
+        /* Лимит текста одного прикреплённого файла свободного чата, симв. */
+        @DefaultValue("120000") int directMaxFileChars,
+        /* Оценочный бюджет токенов на ВСЕ прикреплённые файлы сессии свободного чата:
+           контекст Qwen3 131 072 − max-tokens 4 096 − история (3 ответа × 4 096) и вопрос ≈ 110 тыс. */
+        @DefaultValue("100000") int directMaxSessionTokens) {
 }

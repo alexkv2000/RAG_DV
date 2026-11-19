@@ -56,6 +56,7 @@ rag:
   llm:
     base-url: https://ai.loodsen.ru/api/v1 #https://ai.loodsen.ru/api/v1/chat/completions
     direct-max-file-chars: 400000 #Это Максимум, остальное режется
+    direct-max-session-tokens: 110000  # Оценка токенов на ВСЕ файлы сессии
     api-key: ${LOODSEN_API_KEY}
     model: Qwen3.8-27B
     temperature: 0.2
@@ -66,7 +67,7 @@ rag:
     candidate-chunks: 40 #было 24
     disable-thinking: true
     compare-enabled: true        # false — полностью выключить сценарий сравнения
-    compare-chunks-per-side: 8   # фрагментов на каждую версию (бюджет 15 000 симв. режет лишнее сам)
+    compare-chunks-per-side: 8   # Фрагментов на каждую версию (бюджет 15 000 символов режет лишнее сам)
   content:
     roots: # имя стора (dvsys_binary_storages.Name)
       # NTFS-стор: имя → корень шары
