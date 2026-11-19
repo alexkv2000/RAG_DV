@@ -82,7 +82,13 @@
     /* ===== чат ===== */
     #chat{display:flex;flex-direction:column;gap:10px;height:62vh;overflow-y:auto;padding:16px;
         background:var(--c-card);border:1px solid var(--c-border-table);border-radius:var(--r)}
-    .m{padding:10px 14px;border-radius:var(--r);line-height:1.55;font-size:14px}
+    .m{position:relative;padding:10px 14px;border-radius:var(--r);line-height:1.55;font-size:14px}
+    /* ===== удаление сообщений: ✕ при наведении ===== */
+    .m .del{position:absolute;top:3px;right:5px;display:none;cursor:pointer;color:var(--c-text-3);
+        font-family:inherit;font-weight:700;font-size:12px;line-height:1.3;padding:2px 6px;
+        border-radius:3px;background:rgba(255,255,255,.85)}
+    .m:hover .del{display:block}
+    .m .del:hover{background:var(--c-err-bg);color:var(--c-err)}
     .u{align-self:flex-end;background:#bbedfd;white-space:pre-wrap;max-width:80%}
     .a{align-self:flex-start;background:var(--c-section);border:1px solid var(--c-border-soft);width:88%}
     .a .p{margin:6px 0;font-size:14px;color:var(--c-text)}
@@ -90,11 +96,10 @@
         border-bottom:1px solid var(--c-border-soft);padding-bottom:4px}
     .a h4:first-child{margin-top:0}
     .a strong{color:var(--c-text)}
-    .a ul,.a ol{margin:8px 0;padding:0;list-style:none}
+    .a ul,.a ol{margin:8px 0;padding:0;list-style:none;counter-reset:li}
     .a li{position:relative;margin:4px 0;padding:4px 10px 4px 26px;background:#fff;
         border-left:3px solid var(--c-primary);border-radius:0 var(--r) var(--r) 0;font-size:14px}
     .a ul li::before{content:"▪";position:absolute;left:10px;color:var(--c-primary)}
-    .a ol{counter-reset:li}
     .a ol li::before{counter-increment:li;content:counter(li);position:absolute;left:8px;top:5px;
         background:var(--c-primary);color:#fff;border-radius:2px;font-size:11px;min-width:15px;
         text-align:center;padding:1px 2px}
@@ -187,7 +192,13 @@
 </style></head><body>
 <div id="top">
     <h3>Чат по базе знаний <span class="ver">v5.1</span></h3>
-    <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
+    <div style="display:flex;gap:6px">
+        <button type="button" class="sm" id="delAnswers"
+                title="Удалить все ответы — останутся только вопросы. История для ИИ тоже чистится">🧹 Только вопросы</button>
+        <button type="button" class="sm" id="delQuestions"
+                title="Удалить все вопросы — останутся только ответы. История для ИИ тоже чистится">🧹 Только ответы</button>
+        <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
+    </div>
 </div>
 
 <div id="tabs">
@@ -279,8 +290,8 @@
         <div class="ahead"><b>Самопроверки каналов</b></div>
         <div class="arow">
             <button type="button" id="btnSelf">Эмбеддер</button>
-            <button type="button" id="btnLlm" title="Ответ LLM может занять до пары минут">LLM</button>
             <button type="button" id="btnRerank" title="Кросс-энкодер bge-reranker (ONNX, CPU): реранк кандидатов после Chroma">Реранкер</button>
+            <button type="button" id="btnLlm" title="Ответ LLM может занять до пары минут">LLM</button>
         </div>
         <div id="selfOut" class="mono">Нажмите кнопку — результат появится здесь.</div>
     </div>
@@ -688,6 +699,7 @@
         const u = document.createElement('div');
         u.className = 'm u';
         u.textContent = text;
+        attachDel(u, 'user', text);
         box.appendChild(u);
     }
 
@@ -726,6 +738,7 @@
             return;
         }
         a.innerHTML = md(answerText);
+        a.dataset.raw = answerText;            //точный текст ответа для удаления из истории
         if (!direct && Array.isArray(j.sources) && j.sources.length) appendSources(a, j.sources);
     }
 
@@ -748,9 +761,64 @@
         } catch (err) {
             a.textContent = '⚠ Сервис недоступен: ' + err.message;
         }
+        attachDel(a, 'assistant', a.dataset.raw || '');   // ← НОВОЕ: raw пуст (ошибка) — удаление только из ленты
         box.scrollTop = box.scrollHeight;
     }
-
+    /* ---------- удаление сообщений: ✕ на пузыре и «Только вопросы/ответы» ---------- */
+    const DEL_URLS = {
+        rag:    '/api/rag/chat/delete-message',
+        direct: '/api/rag/direct-chat/delete-message'
+    };
+    /** Кнопка ✕ в углу пузыря. raw — точный текст реплики (пустой → удалить только из ленты). */
+    function attachDel(el, role, raw) {
+        if (el.querySelector('.del')) return;
+        el.dataset.mode = chatMode;              // истории режимов раздельные на бэкенде
+        const x = document.createElement('span');
+        x.className = 'del';
+        x.textContent = '✕';
+        x.title = role === 'user' ? 'Удалить этот вопрос' : 'Удалить этот ответ';
+        x.onclick = () => dropMessage(el, role, raw, el.dataset.mode);
+        el.appendChild(x);
+    }
+    async function dropMessage(el, role, raw, mode) {
+        if (!confirm(role === 'user' ? 'Удалить этот вопрос?' : 'Удалить этот ответ?')) return;
+        removeBubble(el);
+        if (!raw) return;                        // ошибки/заглушки в истории сервера отсутствуют
+        try {
+            await api(DEL_URLS[mode] || DEL_URLS.rag, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({sessionId: sid, role, content: raw})
+            });
+        } catch (e) {
+            console.debug('Реплика не удалена из истории на сервере: ', e);
+        }
+    }
+    /** Пузырь + его карточка источников (идёт сразу за ответом). */
+    function removeBubble(el) {
+        const next = el.nextElementSibling;
+        if (next && next.classList.contains('sources')) next.remove();
+        el.remove();
+    }
+    /** «Только вопросы»/«Только ответы»: вычистить ленту и обе серверные истории роли
+     *  (sid один на оба режима — чистим и RAG, и свободный чат). */
+    async function purgeRole(role) {
+        const what = role === 'assistant' ? 'ответы' : 'вопросы';
+        if (!confirm('Удалить все ' + what + ' из диалога?\nЛента и история для ИИ будут очищены.')) return;
+        box.querySelectorAll(role === 'assistant' ? '.m.a' : '.m.u:not([data-attach])')
+            .forEach(removeBubble);              // data-attach — строки прикрепления файлов, не трогаем
+        for (const url of Object.values(DEL_URLS)) {
+            try {
+                await api(url, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({sessionId: sid, role})   // без content → все реплики роли
+                });
+            } catch (e) {
+                console.debug(url, e);
+            }
+        }
+    }
+    document.getElementById('delAnswers').onclick = () => purgeRole('assistant');
+    document.getElementById('delQuestions').onclick = () => purgeRole('user');
     document.getElementById('f').onsubmit = async e => {
         e.preventDefault();
         const inp = document.getElementById('i');

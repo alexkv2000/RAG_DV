@@ -55,6 +55,7 @@ rag:
     data-path: C:/tessdata/
   llm:
     base-url: https://ai.loodsen.ru/api/v1 #https://ai.loodsen.ru/api/v1/chat/completions
+    direct-max-file-chars: 400000 #Это Максимум, остальное режется
     api-key: ${LOODSEN_API_KEY}
     model: Qwen3.8-27B
     temperature: 0.2

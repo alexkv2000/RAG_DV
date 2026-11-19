@@ -32,7 +32,8 @@ public class DirectChatService {
             "xlsx", "xls", "xlsm", "msg", "png", "jpg", "jpeg", "tif", "tiff");
     private static final long MAX_FILE_BYTES = 32L * 1024 * 1024;
     /** Символов текста одного файла, уходящих в LLM (3 файла ≈ 36 тыс. знаков контекста). */
-    private static final int MAX_FILE_CHARS = 12_000;
+
+    private final int maxFileChars;
     private static final int MAX_FILES = 3;
 
     private final LlmProperties cfg;
@@ -60,8 +61,9 @@ public class DirectChatService {
         this.llm = llm;
         this.prompts = prompts;
         this.extractor = extractor;
-        log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. по {} симв.",
-                cfg.model(), cfg.historyTurns(), MAX_FILES, MAX_FILE_CHARS);
+        this.maxFileChars = Math.max(1, cfg.directMaxFileChars());
+        log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. по {} симв. (rag.llm.direct-max-file-chars)",
+                cfg.model(), cfg.historyTurns(), MAX_FILES, maxFileChars);
     }
 
     public record DirectReply(String sessionId, String answer) {}
@@ -129,7 +131,17 @@ public class DirectChatService {
                     .map(f -> new FileInfo(f.name(), f.text().length())).toList();
         }
     }
-
+    /** Удаление реплик из истории сессии — аналог ChatService.deleteMessages. */
+    public int deleteMessages(String sessionId, String role, String content) {
+        Session s = sessions.get(normSid(sessionId));
+        if (s == null) return 0;
+        boolean all = content == null || content.isBlank();
+        int before = s.history.size();
+        s.history.removeIf(m -> role.equals(m.role()) && (all || content.equals(m.content())));
+        int deleted = before - s.history.size();
+        if (deleted > 0) log.info("DIRECT: удалено {} реплик роли '{}' из истории", deleted, role);
+        return deleted;
+    }
     /* ---------- внутреннее ---------- */
 
     private static String normSid(String sessionId) {
@@ -190,7 +202,7 @@ public class DirectChatService {
             throw new IllegalArgumentException(name + ": файл не содержит извлекаемого текста");
         }
         text = text.strip();
-        return text.length() > MAX_FILE_CHARS
-                ? text.substring(0, MAX_FILE_CHARS) + "\n…[текст файла обрезан]" : text;
+        return text.length() > maxFileChars
+                ? text.substring(0, maxFileChars) + "\n…[текст файла обрезан]" : text;
     }
 }

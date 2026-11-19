@@ -9,11 +9,12 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 /** Чат с историей (в памяти; перезапуск = новые сессии). */
 @Service
 public class ChatService {
-
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
     private final LlmProperties cfg;
     private final AskService ask;
     private final Map<String, ConcurrentLinkedDeque<LlmClient.Message>> sessions = new ConcurrentHashMap<>();
@@ -37,4 +38,21 @@ public class ChatService {
         return new ChatReply(sid, r.answer(), r.sources());
     }
     public ChatReply chat(String sessionId, String message) { return chat(sessionId, message, null); }
+    /**
+     * Удаление реплик из истории сессии: content пуст → ВСЕ реплики роли
+     * (кнопка «Только вопросы»/«Только ответы»), иначе — реплики с точным текстом (✕ на сообщении).
+     * Лента на клиенте уже очищена — здесь убираем то, что видит LLM в следующих вопросах.
+     * Возвращает число удалённых (0 — сессии нет / реплика уже выпала при обрезке historyTurns).
+     */
+    public int deleteMessages(String sessionId, String role, String content) {
+        var history = sessionId == null || sessionId.isBlank()
+                ? null : sessions.get(sessionId.strip());
+        if (history == null) return 0;
+        boolean all = content == null || content.isBlank();
+        int before = history.size();
+        history.removeIf(m -> role.equals(m.role()) && (all || content.equals(m.content())));
+        int deleted = before - history.size();
+        if (deleted > 0) log.info("CHAT: удалено {} реплик роли '{}' из истории", deleted, role);
+        return deleted;
+    }
 }

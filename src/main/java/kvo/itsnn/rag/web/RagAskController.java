@@ -6,6 +6,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @RestController
@@ -56,5 +57,14 @@ public class RagAskController {
 
     private static String classifierOrNull(String c) {
         return c == null || c.isBlank() ? null : c.strip();
+    }
+    public record DeleteMessageRequest(String sessionId, String role, String content) {}
+    /** Удаление реплик из истории чата: content пуст → все реплики роли (user|assistant). */
+    @PostMapping("/chat/delete-message")
+    public Map<String, Object> deleteMessage(@RequestBody DeleteMessageRequest req) {
+        String role = req.role() == null ? "" : req.role().strip().toLowerCase(Locale.ROOT);
+        if (!"user".equals(role) && !"assistant".equals(role))
+            throw new IllegalArgumentException("role должен быть 'user' или 'assistant'");
+        return Map.of("deleted", chat.deleteMessages(req.sessionId(), role, req.content()));
     }
 }

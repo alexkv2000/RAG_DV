@@ -7,6 +7,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/rag")
@@ -55,5 +57,14 @@ public class DirectChatController {
                                                    @RequestParam("name") String name) {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("name пустой");
         return chat.removeFile(sessionId, name);
+    }
+    public record DeleteMessageRequest(String sessionId, String role, String content) {}
+    /** Удаление реплик из истории свободного чата: content пуст → все реплики роли. */
+    @PostMapping("/direct-chat/delete-message")
+    public Map<String, Object> deleteMessage(@RequestBody DeleteMessageRequest req) {
+        String role = req.role() == null ? "" : req.role().strip().toLowerCase(Locale.ROOT);
+        if (!"user".equals(role) && !"assistant".equals(role))
+            throw new IllegalArgumentException("role должен быть 'user' или 'assistant'");
+        return Map.of("deleted", chat.deleteMessages(req.sessionId(), role, req.content()));
     }
 }
