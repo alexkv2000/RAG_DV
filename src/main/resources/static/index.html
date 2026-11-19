@@ -191,12 +191,12 @@
     .delta-down{color:var(--c-err);font-weight:600}
 </style></head><body>
 <div id="top">
-    <h3>Чат по базе знаний <span class="ver">v5.1</span></h3>
+    <h3>Чат по базе знаний DocsVision <span class="ver">v5.1</span></h3>
     <div style="display:flex;gap:6px">
         <button type="button" class="sm" id="delAnswers"
-                title="Удалить все ответы — останутся только вопросы. История для ИИ тоже чистится">🧹 Только вопросы</button>
+                title="Удалить все ответы — останутся только вопросы. История для ИИ тоже чистится">🧹 Удалить все ответы</button>
         <button type="button" class="sm" id="delQuestions"
-                title="Удалить все вопросы — останутся только ответы. История для ИИ тоже чистится">🧹 Только ответы</button>
+                title="Удалить все вопросы — останутся только ответы. История для ИИ тоже чистится">🧹 Удалить все вопросы</button>
         <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
     </div>
 </div>
@@ -219,7 +219,7 @@
         <select id="cls" title="Признак документа"></select>
         <input id="i" placeholder="Спросите по документам…" autocomplete="off">
         <button type="button" id="attach" class="gray" hidden
-                title="Прикрепить файл — его текст будет виден ИИ в этом диалоге">📎</button>
+                title="Прикрепить файл — его текст будет виден ИИ в этом диалоге">📁</button>
         <button>➤</button>
     </form>
     <input type="file" id="df" hidden
