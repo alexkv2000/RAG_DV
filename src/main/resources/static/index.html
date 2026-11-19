@@ -132,6 +132,16 @@
     #cls{max-width:230px;cursor:pointer}
     #i{flex:1;min-width:0}
 
+    /* ===== прикреплённые файлы свободного чата ===== */
+    #dfiles{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+    #dfiles[hidden]{display:none}
+    .dfile{display:inline-flex;align-items:center;gap:6px;background:#fff;
+        border:1px solid var(--c-primary-lighter);border-radius:var(--r);
+        padding:4px 6px 4px 10px;font-size:12.5px;color:var(--c-text)}
+    .dfile .nm{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .dfile .x{cursor:pointer;color:var(--c-text-3);font-weight:700;padding:0 5px;border-radius:3px}
+    .dfile .x:hover{background:var(--c-err-bg);color:var(--c-err)}
+
     /* ===== карточки админки ===== */
     .acard{border:1px solid var(--c-border-table);border-radius:var(--r);padding:15px;background:var(--c-card)}
     .ahead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;
@@ -193,10 +203,16 @@
         <button type="button" class="mode" id="modeDirect" title="Прямой диалог с LLM (rag.llm), без базы знаний">💬 Свободный чат</button>
     </div>
     <div id="chat"></div>
+    <div id="dfiles" hidden></div>
     <form id="f">
         <select id="cls" title="Признак документа"></select>
-        <input id="i" placeholder="Спросите по документам…" autocomplete="off"><button>➤</button>
+        <input id="i" placeholder="Спросите по документам…" autocomplete="off">
+        <button type="button" id="attach" class="gray" hidden
+                title="Прикрепить файл — его текст будет виден ИИ в этом диалоге">📎</button>
+        <button>➤</button>
     </form>
+    <input type="file" id="df" hidden
+    accept=".pdf,.doc,.docx,.rtf,.txt,.csv,.html,.htm,.xlsx,.xls,.xlsm,.msg,.png,.jpg,.jpeg,.tif,.tiff">
 </div>
 
 <!-- ==================== вкладка «Админ» ==================== -->
@@ -348,15 +364,18 @@
     </div>
 </div>
 
-<script>
+<script type="module">
     console.info('RAG UI v5.1 — eval качества поиска (golden-вопросы, recall, история прогонов)');
     /* crypto.randomUUID() есть только в secure context (https/localhost);
-       на http://w17-051911:8080 его нет — скрипт падал на этой строке. */
+       на http://w17-051911:8080 его нет — скрипт падал на этой строке.
+       Скрипт подключён как module: доступны top-level await и строгий режим. */
     function uuid() {
         if (crypto.randomUUID) return crypto.randomUUID();
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-            const r = Math.random() * 16 | 0;
-            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        /* Sonar: битовые операторы не для округления — Math.floor вместо |0,
+           арифметика вместо & 0x3 | 0x8 */
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replaceAll(/[xy]/g, c => {
+            const r = Math.floor(Math.random() * 16);
+            return (c === 'x' ? r : r % 4 + 8).toString(16);
         });
     }
     const sid = localStorage.getItem('ragSid') || uuid();
@@ -373,13 +392,95 @@
     function applyChatMode() {
         modeRag.classList.toggle('on', chatMode === 'rag');
         modeDirect.classList.toggle('on', chatMode === 'direct');
-        cls.disabled = chatMode === 'direct';     // признак документа нужен только RAG-режиму
+        cls.disabled = chatMode === 'direct';
         cls.title = chatMode === 'direct' ? 'Недоступно в свободном чате' : 'Признак документа';
+        attachBtn.hidden = chatMode !== 'direct';
         document.getElementById('i').placeholder = chatMode === 'direct'
             ? 'Спросите что угодно — свободный чат с ИИ…' : 'Спросите по документам…';
         localStorage.setItem('chatMode', chatMode);
+        if (chatMode === 'direct') renderDirectFiles();
+        else dfBox.hidden = true;
     }
-
+    /* ---------- прикреплённые файлы свободного чата ---------- */
+    const dfInp = document.getElementById('df');
+    const dfBox = document.getElementById('dfiles');
+    const attachBtn = document.getElementById('attach');
+    attachBtn.onclick = () => dfInp.click();
+    dfInp.onchange = async () => {
+        const f = dfInp.files && dfInp.files[0];
+        dfInp.value = '';                       // тот же файл можно выбрать повторно после ошибки
+        if (!f) return;
+        const note = document.createElement('div');
+        note.className = 'm u';
+        note.dataset.attach = f.name.toLowerCase();   // метка: строка принадлежит этому файлу
+        note.textContent = '📎 ' + f.name + ' — извлекаю текст…';
+        box.appendChild(note);
+        box.scrollTop = box.scrollHeight;
+        try {
+            const fd = new FormData();
+            fd.append('sessionId', sid);
+            fd.append('file', f, f.name);
+            const r = await fetch('/api/rag/direct-chat/files', {method: 'POST', body: fd});
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(String(j.error || ('HTTP ' + r.status)));
+            const info = (Array.isArray(j) ? j : [])
+                .find(x => String(x.name).toLowerCase() === f.name.toLowerCase());
+            note.textContent = '📎 Файл прикреплён: ' + f.name
+                + (info ? ' (' + info.chars + ' симв. текста)' : '');
+            renderDirectFiles(j);
+        } catch (e) {
+            delete note.dataset.attach;         // ошибка загрузки — это не «прикреплён», метку снимаем
+            note.textContent = '⚠ ' + f.name + ': ' + e.message
+                + '. Скан распознаётся OCR — это может занять до минуты.';
+        }
+        box.scrollTop = box.scrollHeight;
+    };
+    async function loadDirectFiles() {
+        try {
+            const j = await api('/api/rag/direct-chat/files?sessionId=' + encodeURIComponent(sid));
+            renderDirectFiles(Array.isArray(j) ? j : []);
+        } catch (e) {
+            console.debug('Файлы сессии не загружены: ', e);   // не критично: панель просто скрыта
+            dfBox.hidden = true;
+        }
+    }
+    function renderDirectFiles(list) {
+        if (!list) { loadDirectFiles(); return; }   // без аргумента — подтянуть с сервера
+        dfBox.innerHTML = '';
+        dfBox.hidden = !(chatMode === 'direct' && list.length);
+        for (const f of list) {
+            const chip = document.createElement('span');
+            chip.className = 'dfile';
+            const nm = document.createElement('span');
+            nm.className = 'nm';
+            nm.textContent = '📎 ' + f.name;
+            nm.title = f.name + ' — ' + f.chars + ' симв. текста уходит в контекст';
+            const x = document.createElement('span');
+            x.className = 'x';
+            x.textContent = '✕';
+            x.title = 'Открепить файл';
+            x.onclick = async () => {
+                try {
+                    const j = await api('/api/rag/direct-chat/files?sessionId='
+                        + encodeURIComponent(sid) + '&name=' + encodeURIComponent(f.name), {method: 'DELETE'});
+                    dropAttachNotes(f.name);    // удалить строки «файл прикреплён» из ленты
+                    renderDirectFiles(j);
+                } catch (e) {
+                    alert('Не удалось открепить файл: ' + e.message);
+                }
+            };
+            chip.append(nm, x);
+            dfBox.appendChild(chip);
+        }
+    }
+    /** Убрать из ленты чата служебные строки, относящиеся к открепляемому файлу
+     *  («…извлекаю текст…» и «Файл прикреплён: …»). */
+    function dropAttachNotes(name) {
+        const k = String(name).toLowerCase();
+        box.querySelectorAll('.m[data-attach]').forEach(el => {
+            if (el.dataset.attach === k) el.remove();
+        });
+    }
     modeRag.onclick = () => { chatMode = 'rag'; applyChatMode(); };
     modeDirect.onclick = () => { chatMode = 'direct'; applyChatMode(); };
     applyChatMode();
@@ -395,108 +496,123 @@
         localStorage.removeItem('ragSid');
         location.reload();          // перезагрузка сохраняет adminPanel=1 в адресе — режим не теряется
     };
-    /*-------блок загрузки классификаторов-------*/
+
+    /*-------блок загрузки классификаторов: top-level await (скрипт — module) -------*/
     const any = document.createElement('option');
     any.value = '';
     any.textContent = 'Все документы';
     cls.appendChild(any);
-    (async () => {
-        try {
-            const r = await fetch('/api/rag/classifiers');
-            const list = await r.json();
-            for (const c of list) {
-                const o = document.createElement('option');
-                o.value = c.classifier;
-                o.textContent = c.classifier + ' (карточек: ' + (c.cards ?? '?')
-                    + ', файлов: ' + (c.files ?? '?') + ')';
-                o.title = o.textContent;   // длинная подпись целиком видна при наведении
-                cls.appendChild(o);
-            }
-            /* по умолчанию выбираем СТО: сначала точное совпадение, иначе — первый,
-               чьё имя начинается с «СТО» (напр. «СТО (регламент)»). Нет СТО — остаётся «Все документы». */
-            const sto = list.find(c => c.classifier === 'СТО')
-                || list.find(c => String(c.classifier ?? '').startsWith('СТО'));
-            if (sto) cls.value = sto.classifier;
-        } catch (e) {
-            console.warn('Классификаторы не загружены: ', e);
+    try {
+        const r = await fetch('/api/rag/classifiers');
+        const list = await r.json();
+        for (const c of list) {
+            const o = document.createElement('option');
+            o.value = c.classifier;
+            o.textContent = c.classifier + ' (карточек: ' + (c.cards ?? '?')
+                + ', файлов: ' + (c.files ?? '?') + ')';
+            o.title = o.textContent;   // длинная подпись целиком видна при наведении
+            cls.appendChild(o);
         }
-    })();
+        /* по умолчанию выбираем СТО: сначала точное совпадение, иначе — первый,
+           чьё имя начинается с «СТО» (напр. «СТО (регламент)»). Нет СТО — остаётся «Все документы». */
+        const sto = list.find(c => c.classifier === 'СТО')
+            || list.find(c => String(c.classifier ?? '').startsWith('СТО'));
+        if (sto) cls.value = sto.classifier;
+    } catch (e) {
+        console.warn('Классификаторы не загружены: ', e);
+    }
 
-    /* ---------- мини-markdown ---------- */
-    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    /* ---------- мини-markdown ----------
+       md() — драйвер: идёт по строкам и раздаёт их парсерам блоков;
+       каждый парсер возвращает {html, next} (позиция следующей строки) или null — «блок не мой». */
+    const esc = s => String(s ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
 
     function inline(s) {
         s = esc(s);
-        s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-        s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
-        s = s.replace(/\[([^\]\n]{1,120})\]/g, '<span class="cite">[$1]</span>');
+        s = s.replaceAll(/`([^`]+)`/g, '<code>$1</code>');
+        s = s.replaceAll(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        s = s.replaceAll(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
+        s = s.replaceAll(/\[([^\]\n]{1,120})\]/g, '<span class="cite">[$1]</span>');
         return s;
+    }
+
+    /** ```-блок кода (открывающая строка съедена драйвером, ждём закрывающую). */
+    function mdCode(lines, i) {
+        if (!/^\s*```/.test(lines[i])) return null;
+        const code = [];
+        let j = i + 1;
+        while (j < lines.length && !/^\s*```/.test(lines[j])) code.push(lines[j++]);
+        return {html: '<pre><code>' + esc(code.join('\n')) + '</code></pre>', next: j + 1};
+    }
+
+    /** Заголовок #..####. */
+    function mdHeading(lines, i) {
+        const h = lines[i].match(/^\s*(#{1,4})\s+(.*)/);
+        return h ? {html: '<h4>' + inline(h[2]) + '</h4>', next: i + 1} : null;
+    }
+
+    /** Цитата > … (рекурсивно markdown внутри). */
+    function mdQuote(lines, i) {
+        if (!/^\s*>\s?/.test(lines[i])) return null;
+        const q = [];
+        let j = i;
+        while (j < lines.length && /^\s*>\s?/.test(lines[j])) q.push(lines[j++].replace(/^\s*>\s?/, ''));
+        return {html: '<blockquote>' + md(q.join('\n')) + '</blockquote>', next: j};
+    }
+
+    /** Маркированный или нумерованный список — один парсер на оба вида (разница только в regex и теге). */
+    function mdList(lines, i) {
+        return mdListKind(lines, i, /^\s*([-*+])\s+/, 'ul')
+            || mdListKind(lines, i, /^\s*\d+[.)]\s+/, 'ol');
+    }
+
+    function mdListKind(lines, i, re, tag) {
+        if (!re.test(lines[i])) return null;
+        const it = [];
+        let j = i;
+        while (j < lines.length && re.test(lines[j])) it.push(lines[j++].replace(re, ''));
+        return {
+            html: '<' + tag + '>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</' + tag + '>',
+            next: j
+        };
+    }
+
+    /** Горизонтальная черта ---. */
+    function mdHr(lines, i) {
+        return /^\s*-{3,}\s*$/.test(lines[i]) ? {html: '<hr>', next: i + 1} : null;
     }
 
     function md(text) {
         const lines = String(text || '')
-            .replace(/^Источники:.*/gim, '')
+            .replaceAll(/^Источники:.*/gim, '')
             .split('\n');
-        let html = '', i = 0, buf = [];
+        let html = '';
+        const buf = [];                     // абзац-накопитель обычных строк
         const flush = () => {
             html += buf.length ? '<div class="p">' + buf.map(inline).join('<br>') + '</div>' : '';
-            buf = [];
+            buf.length = 0;
         };
+        let i = 0;
         while (i < lines.length) {
-            const l = lines[i];
-            if (/^\s*```/.test(l)) {
+            const block = mdCode(lines, i) || mdHeading(lines, i) || mdQuote(lines, i)
+                || mdList(lines, i) || mdHr(lines, i);
+            if (block) {
                 flush();
-                i++;
-                const code = [];
-                while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
-                i++;
-                html += '<pre><code>' + esc(code.join('\n')) + '</code></pre>';
+                html += block.html;
+                i = block.next;
                 continue;
             }
-            const h = l.match(/^\s*(#{1,4})\s+(.*)/);
-            if (h) {
+            if (lines[i].trim()) {
+                buf.push(lines[i]);
+            } else {
                 flush();
-                html += '<h4>' + inline(h[2]) + '</h4>';
-                i++;
-                continue;
             }
-            if (/^\s*>\s?/.test(l)) {
-                flush();
-                const q = [];
-                while (i < lines.length && /^\s*>\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
-                html += '<blockquote>' + md(q.join('\n')) + '</blockquote>';
-                continue;
-            }
-            if (/^\s*([-*+])\s+/.test(l)) {
-                flush();
-                const it = [];
-                while (i < lines.length && /^\s*([-*+])\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*([-*+])\s+/, ''));
-                html += '<ul>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ul>';
-                continue;
-            }
-            if (/^\s*\d+[.)]\s+/.test(l)) {
-                flush();
-                const it = [];
-                while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) it.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ''));
-                html += '<ol>' + it.map(t => '<li>' + inline(t) + '</li>').join('') + '</ol>';
-                continue;
-            }
-            if (/^\s*-{3,}\s*$/.test(l)) {
-                flush();
-                html += '<hr>';
-                i++;
-                continue;
-            }
-            if (!l.trim()) {
-                flush();
-                i++;
-                continue;
-            }
-            buf.push(l);
             i++;
         }
-        flush();          // фикс v3.4: без конкатенации с undefined
+        flush();          // хвост абзаца-накопителя
         return html;
     }
 
@@ -511,7 +627,7 @@
         const seen = new Set();
         srcs.forEach((x, n) => {
             x = (x && typeof x === 'object') ? x : {};
-            const chunk = (x.chunkNo != null) ? x.chunkNo : '?';
+            const chunk = (x.chunkNo == null) ? '?' : x.chunkNo;
             const name = (x.fileName != null && x.fileName !== '') ? String(x.fileName) : ('источник ' + (n + 1));
             const key = String(x.documentGuid ?? '') + '#' + chunk;
             if (seen.has(key)) return;
@@ -542,11 +658,14 @@
     }
 
     function linkCites(aEl, srcs) {
-        const norm = s => String(s ?? '').toLowerCase().replace(/\s+/g, '');
+        const norm = s => String(s ?? '').toLowerCase().replaceAll(/\s+/g, '');
         aEl.querySelectorAll('.cite').forEach(sp => {
             const m = sp.textContent.match(/фрагмент[^\d]*(\d+)/i);
             if (!m) return;
-            const nm = (sp.textContent.match(/\[([^,\]]+)/) || [])[1] || '';
+            const t = sp.textContent;
+            const open = t.indexOf('[') + 1;
+            const comma = t.indexOf(',', open);
+            const nm = (open > 0 && comma > open) ? t.slice(open, comma) : '';
             const key = norm(nm).slice(0, 10);
             if (key.length < 4) return;
             const idx = srcs.findIndex(r => +r.chunkNo === +m[1] && norm(r.fileName).includes(key));
@@ -558,60 +677,87 @@
                 if (!row) return;
                 row.scrollIntoView({block: 'center', behavior: 'smooth'});
                 row.classList.remove('flash');
-                void row.offsetWidth;
+                row.getBoundingClientRect();     // forced reflow — анимация flash перезапустится
                 row.classList.add('flash');
             };
         });
     }
 
     /* ---------- отправка вопроса (RAG или свободный чат — по переключателю) ---------- */
+    function addUserBubble(text) {
+        const u = document.createElement('div');
+        u.className = 'm u';
+        u.textContent = text;
+        box.appendChild(u);
+    }
+
+    function addPendingAnswer(direct) {
+        const a = document.createElement('div');
+        a.className = 'm a';
+        a.textContent = direct ? '…думаю…' : '…ищу в документах и думаю…';
+        box.appendChild(a);
+        return a;
+    }
+
+    /** Сеть и JSON — здесь; ошибки бэкенда (4xx/5xx) не бросаем, отдаём как есть в renderReply. */
+    async function askBackend(direct, q) {
+        const r = await fetch(direct ? '/api/rag/direct-chat' : '/api/rag/chat', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(direct
+                ? {sessionId: sid, message: q}
+                : {sessionId: sid, message: q, classifier: cls.value || null})
+        });
+        return {ok: r.ok, status: r.status, j: await r.json().catch(() => ({}))};
+    }
+
+    /** Разбор ответа бэкенда в пузырь ответа. */
+    function renderReply(a, direct, resp) {
+        const j = resp.j;
+        const answerText = String(j && j.answer != null ? j.answer : '').trim();
+        if (!resp.ok) {
+            a.textContent = '⚠ ' + (String(j.error || '') || 'Сервис ответил ошибкой ' + resp.status);
+            return;
+        }
+        if (!answerText) {
+            a.textContent = direct
+                ? 'Модель вернула пустой ответ — попробуйте переформулировать вопрос.'
+                : 'Не нашлось ответа по вашему вопросу. Попробуйте переформулировать '
+                + 'или выбрать другой признак документа.';
+            return;
+        }
+        a.innerHTML = md(answerText);
+        if (!direct && Array.isArray(j.sources) && j.sources.length) appendSources(a, j.sources);
+    }
+
+    function appendSources(a, srcs) {
+        try {
+            box.appendChild(sourcesEl(srcs));
+            linkCites(a, srcs);
+        } catch (e) {
+            console.warn('Источники не отрисованы (ответ показан полностью): ', e);
+        }
+    }
+
+    async function sendChatQuestion(q) {
+        const direct = chatMode === 'direct';
+        addUserBubble(q);
+        const a = addPendingAnswer(direct);
+        box.scrollTop = box.scrollHeight;
+        try {
+            renderReply(a, direct, await askBackend(direct, q));
+        } catch (err) {
+            a.textContent = '⚠ Сервис недоступен: ' + err.message;
+        }
+        box.scrollTop = box.scrollHeight;
+    }
+
     document.getElementById('f').onsubmit = async e => {
         e.preventDefault();
         const inp = document.getElementById('i');
         const q = inp.value.trim();
         if (!q) return;
         inp.value = '';
-        const direct = chatMode === 'direct';
-        const u = document.createElement('div');
-        u.className = 'm u';
-        u.textContent = q;
-        box.appendChild(u);
-        const a = document.createElement('div');
-        a.className = 'm a';
-        a.textContent = direct ? '…думаю…' : '…ищу в документах и думаю…';
-        box.appendChild(a);
-        box.scrollTop = box.scrollHeight;
-        try {
-            const r = await fetch(direct ? '/api/rag/direct-chat' : '/api/rag/chat', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(direct
-                    ? {sessionId: sid, message: q}
-                    : {sessionId: sid, message: q, classifier: cls.value || null})
-            });
-            const j = await r.json().catch(() => ({}));
-            const answerText = String(j && j.answer != null ? j.answer : '').trim();
-            if (!r.ok) {
-                a.textContent = '⚠ ' + (String(j.error || '') || 'Сервис ответил ошибкой ' + r.status);
-            } else if (!answerText) {
-                a.textContent = direct
-                    ? 'Модель вернула пустой ответ — попробуйте переформулировать вопрос.'
-                    : 'Не нашлось ответа по вашему вопросу. Попробуйте переформулировать '
-                    + 'или выбрать другой признак документа.';
-            } else {
-                a.innerHTML = md(answerText);
-                if (!direct && Array.isArray(j.sources) && j.sources.length) {
-                    try {
-                        box.appendChild(sourcesEl(j.sources));
-                        linkCites(a, j.sources);
-                    } catch (e) {
-                        console.warn('Источники не отрисованы (ответ показан полностью): ', e);
-                    }
-                }
-            }
-        } catch (err) {
-            a.textContent = '⚠ Сервис недоступен: ' + err.message;
-        }
-        box.scrollTop = box.scrollHeight;
+        await sendChatQuestion(q);
     };
 
     /* ====================== вкладки «Админ» / «Промты» ====================== */
@@ -631,7 +777,8 @@
         let j = {};
         try {
             j = await r.json();
-        } catch (e) { /* не JSON — ниже отразим статус */
+        } catch (e) {
+            console.debug('Ответ не JSON — отразим HTTP-статус: ', e);
         }
         if (!r.ok) throw new Error(String(j.error || ('HTTP ' + r.status)));
         return j;
@@ -690,6 +837,14 @@
     }
 
     /* ---- сверка embedding (ночь 03:30 или кнопка «Сверить сейчас»; rag_control: nightly_embedding) ---- */
+
+    /** Длительность сверки: «1,2 мин» / «3,4 с»; null/undefined → ''. */
+    function fmtDur(ms) {
+        if (ms == null) return '';
+        if (ms < 60000) return (ms / 1000).toFixed(1).replace('.', ',') + ' с';
+        return (ms / 60000).toFixed(1).replace('.', ',') + ' мин';
+    }
+
     function renderNightly(raw) {
         const el = $('nightly');
         if (!el) return;
@@ -701,14 +856,13 @@
         try {
             n = JSON.parse(raw);
         } catch (e) {
+            console.warn('nightly_embedding — не JSON: ', e);
             el.innerHTML = '<span class="mono bad">Сверка embedding: не разобрано — ' + esc(String(raw)) + '</span>';
             return;
         }
         const when = n.at ? new Date(n.at).toLocaleString('ru-RU') : '?';
         const num = v => (v == null || v < 0) ? '—' : Number(v).toLocaleString('ru-RU');
-        const dur = n.ms == null ? '' : n.ms >= 60000
-            ? (n.ms / 60000).toFixed(1).replace('.', ',') + ' мин'
-            : (n.ms / 1000).toFixed(1).replace('.', ',') + ' с';
+        const dur = fmtDur(n.ms);
         let verdict, color = '#2e7d32';
         if (n.result === 'ok') {
             verdict = '✓ пройдена: Chroma = MSSQL = ' + num(n.chromaAfter) + ' векторов';
@@ -899,6 +1053,13 @@
     $('btnRerank').onclick = e => runSelf('/api/rag/admin/rerank-selftest', 'Реранкер', e.target);
 
     /* ---- eval: качество поиска по golden-вопросам (dbo.rag_eval_question) ---- */
+
+    /** Подсказка к «Прогонов ещё не было»: зависит от того, есть ли вопросы в наборе. */
+    function evalHint(n) {
+        if (n > 0) return ' — нажмите «Прогнать»';
+        return ' — добавьте вопросы (ниже) и нажмите «Прогнать»';
+    }
+
     async function loadEval() {
         const el = $('evalLast');
         el.textContent = 'загружаю…';
@@ -912,17 +1073,25 @@
         }
         renderEvalHistory(Array.isArray(runs) ? runs : []);
         const n = Array.isArray(qs) ? qs.length : 0;
-        el.innerHTML = (Array.isArray(runs) && runs.length)
-            ? evalSummary(runs[0]) + ' · вопросов в наборе: ' + n
-            : 'Прогонов ещё не было · вопросов в наборе: ' + n
-            + (n ? ' — нажмите «Прогнать»' : ' — добавьте вопросы (ниже) и нажмите «Прогнать»');
+        if (Array.isArray(runs) && runs.length) {
+            el.innerHTML = evalSummary(runs[0]) + ' · вопросов в наборе: ' + n;
+        } else {
+            el.innerHTML = 'Прогонов ещё не было · вопросов в наборе: ' + n + evalHint(n);
+        }
+    }
+
+    /** Цвет recall в сводке: ≥80% зелёный, ≥50% оранжевый, ниже — красный. */
+    function recallColor(pct) {
+        if (pct >= 80) return '#2e7d32';
+        if (pct >= 50) return '#e65100';
+        return '#c62828';
     }
 
     function evalSummary(r) {
         const pct = Math.round((r.recall ?? 0) * 100);
         return 'Прогон #' + r.runId + ' (' + new Date(r.at).toLocaleString('ru-RU') + ')'
             + (r.label ? ' — «' + esc(String(r.label)) + '»' : '')
-            + ': <b style="color:' + (pct >= 80 ? '#2e7d32' : pct >= 50 ? '#e65100' : '#c62828') + '">'
+            + ': <b style="color:' + recallColor(pct) + '">'
             + 'recall ' + pct + '%</b> · файлов ' + r.found + '/' + r.expected
             + ' · вопросов целиком ' + r.fullPass + '/' + r.questions
             + (r.mustFail ? ' · must не прошёл: ' + r.mustFail : '')
@@ -1005,7 +1174,7 @@
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({label: $('evalLabel').value.trim()})
             });
-            $('evalLast').innerHTML = '✓ ' + evalSummary(Object.assign({}, j, {at: new Date().toISOString()}));
+            $('evalLast').innerHTML = '✓ ' + evalSummary({...j, at: new Date().toISOString()});
             renderEvalDetails(j.details, 'Только что — прогон #' + (j.result === 'done' ? 'новый' : ''));
             loadEval();
         } catch (e) {
@@ -1174,7 +1343,8 @@
                     cp.textContent = '✓ Скопировано';
                     setTimeout(() => cp.textContent = '⧉ Скопировать JSON', 1500);
                 } catch (e) {
-                    cp.textContent = '⚠ буфер недоступен';
+                    console.warn('Буфер обмена недоступен: ', e);
+                    cp.textContent = '⚠ буфер недоступен (' + e.message + ')';
                 }
             };
             outEl.appendChild(cp);
