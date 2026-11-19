@@ -1,6 +1,5 @@
-package kvo.itsnn.rag.web;
+package kvo.itsnn.rag.eval;
 
-import kvo.itsnn.rag.eval.EvalService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;

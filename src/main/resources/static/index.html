@@ -1,114 +1,179 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><title>RAG-чат</title><style>
-    body{font-family:"Segoe UI",sans-serif;max-width:800px;margin:24px auto;background:#f0f2f6;padding:0 12px}
-    h3{color:#334}
+    /* ===== корпоративная палитра (RKIT/GAZ: #1976d2, Segoe UI, радиус 4px) ===== */
+    :root{
+        --c-primary:#1976d2;        /* основной синий */
+        --c-primary-hover:#1565c0;
+        --c-primary-active:#0d47a1;
+        --c-primary-light:#e3f2fd;  /* выделение/ховер */
+        --c-primary-lighter:#bbdefb;
+        --c-border:#d0d0d0;         /* поля ввода */
+        --c-border-hover:#b0b0b0;
+        --c-border-soft:#e0e0e0;    /* разделители */
+        --c-border-table:#ddd;      /* таблицы/карточки */
+        --c-bg:#f5f5f5;             /* фон страницы */
+        --c-card:#fff;
+        --c-section:#fafafa;
+        --c-text:#333;
+        --c-text-2:#666;
+        --c-text-3:#888;
+        --c-ok:#2e7d32;  --c-ok-bg:#e8f5e9;
+        --c-err:#c62828; --c-err-bg:#ffebee;
+        --c-warn:#e65100;--c-warn-bg:#fff3e0;
+        --r:4px;                    /* единый радиус скругления */
+    }
+    body{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;max-width:900px;margin:24px auto;
+        background:var(--c-bg);padding:0 12px;color:var(--c-text);font-size:14px}
+
+    /* ===== шапка ===== */
     #top{display:flex;align-items:center;justify-content:space-between}
-    #top h3{display:flex;align-items:center;gap:8px}
-    .ver{font-size:11px;color:#9aa3b5;font-weight:400;background:#e9edf4;padding:1px 7px;border-radius:999px}
-    #newChat{background:#fff;color:#1d4ed8;border:1px solid #8fb0f7;padding:6px 12px;font-size:.9em}
-    #newChat:hover{background:#e3edff;border-color:#2563eb}
+    #top h3{display:flex;align-items:center;gap:8px;font-size:20px;font-weight:600;color:var(--c-text)}
+    .ver{font-size:11px;color:#174ea6;font-weight:600;background:#e3ecf7;padding:1px 8px;border-radius:10px}
+    #newChat{background:#fff;color:#555;border:1px solid var(--c-border)}
+    #newChat:hover{background:#f5f5f5;border-color:var(--c-border-hover);color:#555}
+    #newChat:active{background:#e8e8e8}
+
+    /* ===== поля ввода: рамка #d0d0d0, фокус — синий ореол ===== */
+    input,select,textarea{font-family:inherit;font-size:13px;color:var(--c-text);
+        padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--r);background:#fff;
+        box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease}
+    input::placeholder,textarea::placeholder{color:#aaa}
+    input:hover,select:hover,textarea:hover{border-color:var(--c-border-hover)}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--c-primary);
+        box-shadow:0 0 0 2px rgba(25,118,210,.12)}
+    input[type=number]{-moz-appearance:textfield}
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+    /* ===== кнопки ===== */
+    button{padding:8px 16px;border:none;border-radius:var(--r);background-color:var(--c-primary);color:#fff;
+        font-family:inherit;font-size:13px;cursor:pointer;
+        transition:background-color .15s ease,opacity .15s ease}
+    button:hover{background-color:var(--c-primary-hover)}
+    button:active{background-color:var(--c-primary-active)}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    button.gray{background:#fff;color:#555;border:1px solid var(--c-border)}
+    button.gray:hover{background:#f5f5f5;border-color:var(--c-border-hover)}
+    button.gray:active{background:#e8e8e8}
+    button.warn{background:#d32f2f}
+    button.warn:hover,button.warn:active{background:#b71c1c}
+
     /* ===== переключатель режима чата ===== */
     #modeRow{display:flex;gap:6px;margin-top:12px}
-    .mode{flex:none;padding:6px 14px;font-size:.85em;border:1px solid #c9d2e3;border-radius:999px;
-        background:#e4e9f4;color:#42506b}
-    .mode.on{background:#1d4ed8;border-color:#1d4ed8;color:#fff;font-weight:600}
-    .mode:not(.on):hover{background:#e3edff;border-color:#8fb0f7}
-    /* ===== вкладки ===== */
-    #tabs{display:flex;gap:6px;margin-top:12px}
-    #tabs[hidden]{display:none}         /* display:flex перебивает hidden — как у #viewAdmin */
-    .tab{flex:1;padding:9px 10px;border:1px solid #c9d2e3;border-bottom:none;border-radius:8px 8px 0 0;
-        background:#e4e9f4;color:#42506b;font-size:.95em}
-    .tab.on{background:#fff;color:#14337a;font-weight:600;border-color:#dde}
-    #viewAdmin{display:flex;flex-direction:column;gap:12px;background:#fff;border:1px solid #dde;
-        border-radius:10px;padding:14px;height:calc(62vh + 58px);overflow-y:auto}
-    #viewAdmin[hidden]{display:none}     /* display:flex перебивает hidden — возвращаем */
-    #viewPrompts{display:flex;flex-direction:column;gap:12px;background:#fff;border:1px solid #dde;
-        border-radius:10px;padding:14px;height:calc(62vh + 58px);overflow-y:auto}
-    #viewPrompts[hidden]{display:none}
+    .mode{flex:none;padding:6px 14px;font-size:13px;border:1px solid var(--c-border);border-radius:var(--r);
+        background:#fff;color:#555;transition:all .15s ease}
+    .mode.on{background:var(--c-primary);border-color:var(--c-primary);color:#fff;font-weight:600}
+    .mode:not(.on):hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
 
-    #chat{display:flex;flex-direction:column;gap:10px;height:62vh;overflow-y:auto;padding:14px;
-        background:#fff;border:1px solid #dde;border-radius:10px}
-    .m{padding:10px 14px;border-radius:12px;line-height:1.55}
-    .u{align-self:flex-end;background:#dcf8c6;white-space:pre-wrap;max-width:80%}
-    .a{align-self:flex-start;background:#eef1f6;width:88%}
-    .a .p{margin:6px 0;font-size:15px;color:#1c2333}
-    .a h4{margin:12px 0 6px;font-size:1.06em;color:#14337a;border-bottom:2px solid #c7d6f5;padding-bottom:3px}
+    /* ===== вкладки: активная подчёркнута синим (как в корпоративных диалогах) ===== */
+    #tabs{display:flex;gap:4px;margin-top:12px;border-bottom:2px solid var(--c-border-soft)}
+    #tabs[hidden]{display:none}
+    .tab{flex:1;padding:10px 12px;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;
+        background:transparent;color:#666;font-size:14px;font-weight:500;border-radius:0;
+        transition:color .2s ease,background-color .2s ease}
+    .tab:hover{background:#f5f5f5;color:var(--c-text)}
+    .tab.on{color:var(--c-primary);border-bottom-color:var(--c-primary);font-weight:600;background:transparent}
+
+    /* ===== панели вкладок ===== */
+    #viewAdmin,#viewPrompts{display:flex;flex-direction:column;gap:16px;
+        height:calc(62vh + 58px);overflow-y:auto}
+    #viewAdmin[hidden],#viewPrompts[hidden]{display:none}   /* display:flex перебивает hidden */
+
+    /* ===== чат ===== */
+    #chat{display:flex;flex-direction:column;gap:10px;height:62vh;overflow-y:auto;padding:16px;
+        background:var(--c-card);border:1px solid var(--c-border-table);border-radius:var(--r)}
+    .m{padding:10px 14px;border-radius:var(--r);line-height:1.55;font-size:14px}
+    .u{align-self:flex-end;background:#bbedfd;white-space:pre-wrap;max-width:80%}
+    .a{align-self:flex-start;background:var(--c-section);border:1px solid var(--c-border-soft);width:88%}
+    .a .p{margin:6px 0;font-size:14px;color:var(--c-text)}
+    .a h4{margin:12px 0 6px;font-size:1em;font-weight:600;color:var(--c-text);
+        border-bottom:1px solid var(--c-border-soft);padding-bottom:4px}
     .a h4:first-child{margin-top:0}
-    .a strong{color:#0f2f73}
+    .a strong{color:var(--c-text)}
     .a ul,.a ol{margin:8px 0;padding:0;list-style:none}
-    .a li{position:relative;margin:4px 0;padding:4px 10px 4px 26px;background:#f6f8fc;
-        border-left:3px solid #7f9cf5;border-radius:0 6px 6px 0;font-size:14.5px}
-    .a ul li::before{content:"▪";position:absolute;left:10px;color:#2563eb}
+    .a li{position:relative;margin:4px 0;padding:4px 10px 4px 26px;background:#fff;
+        border-left:3px solid var(--c-primary);border-radius:0 var(--r) var(--r) 0;font-size:14px}
+    .a ul li::before{content:"▪";position:absolute;left:10px;color:var(--c-primary)}
     .a ol{counter-reset:li}
     .a ol li::before{counter-increment:li;content:counter(li);position:absolute;left:8px;top:5px;
-        background:#2563eb;color:#fff;border-radius:4px;font-size:11px;min-width:15px;text-align:center;padding:1px 2px}
-    .a blockquote{margin:10px 0;padding:7px 14px;border-left:4px solid #f59e0b;background:#fdf6e7;
-        border-radius:0 8px 8px 0;color:#5a4a1f;font-style:italic;font-size:14px}
-    .a blockquote::before{content:"❝ ";color:#d97706}
-    .cite{display:inline-block;background:#ffffff;border:1px solid #8fb0f7;color:#1d4ed8;border-radius:999px;
-        padding:0 9px;font-size:.78em;line-height:1.7;white-space:nowrap;vertical-align:baseline;
-        box-shadow:0 1px 1px rgba(29,78,216,.12)}
+        background:var(--c-primary);color:#fff;border-radius:2px;font-size:11px;min-width:15px;
+        text-align:center;padding:1px 2px}
+    .a blockquote{margin:10px 0;padding:8px 14px;border-left:4px solid #fb8c00;background:var(--c-warn-bg);
+        border-radius:0 var(--r) var(--r) 0;color:#6d4c41;font-style:italic;font-size:13px}
+    .a blockquote::before{content:"❝ ";color:var(--c-warn)}
+    .a code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:.9em}
+    .a pre{background:#f5f5f5;border:1px solid var(--c-border-soft);border-radius:var(--r);
+        padding:10px;overflow-x:auto;margin:8px 0}
+    .a hr{border:0;border-top:1px solid var(--c-border-soft);margin:8px 0}
+
+    .cite{display:inline-block;background:#fff;border:1px solid var(--c-primary);color:var(--c-primary);
+        border-radius:var(--r);padding:0 8px;font-size:.8em;line-height:1.7;white-space:nowrap;
+        vertical-align:baseline}
     .cite::before{content:"📄 "}
-    .cite.linked{cursor:pointer}
-    .cite.linked:hover{background:#e3edff;border-color:#2563eb}
-    .a code{background:#e2e4ea;padding:1px 5px;border-radius:4px;font-size:.9em}
-    .a hr{border:0;border-top:1px solid #d5dbe7;margin:8px 0}
-    .sources{align-self:flex-start;width:88%;background:#fafbfd;border:1px dashed #b9c3d6;border-radius:10px;
-        padding:8px 12px;margin-top:-2px;font-family:Consolas,"Courier New",monospace}
-    .sources .t{font-family:"Segoe UI",sans-serif;font-size:10.5px;font-weight:700;color:#8a94a8;
-        letter-spacing:.8px;text-transform:uppercase;margin-bottom:5px}
-    .srow{display:flex;gap:8px;align-items:baseline;padding:2px 6px;font-size:12.5px;color:#5a6478;border-radius:4px}
-    .srow i{font-style:normal;background:#8a94a8;color:#fff;border-radius:4px;min-width:17px;text-align:center;
-        font-size:10.5px;padding:1px 3px;flex:none}
-    .srow b{color:#39415a;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .srow b a{color:#1d4ed8;text-decoration:none}
+    .cite.linked{cursor:pointer;transition:background-color .15s ease,border-color .15s ease}
+    .cite.linked:hover{background:var(--c-primary-lighter);border-color:var(--c-primary-hover)}
+
+    .sources{align-self:flex-start;width:88%;background:var(--c-section);border:1px dashed var(--c-border);
+        border-radius:var(--r);padding:10px 12px;margin-top:-2px;
+        font-family:Consolas,"Courier New",monospace}
+    .sources .t{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;font-size:10.5px;font-weight:700;
+        color:var(--c-text-3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px}
+    .srow{display:flex;gap:8px;align-items:baseline;padding:3px 6px;font-size:12.5px;
+        color:var(--c-text-2);border-radius:3px}
+    .srow i{font-style:normal;background:var(--c-text-3);color:#fff;border-radius:3px;min-width:17px;
+        text-align:center;font-size:10.5px;padding:1px 3px;flex:none}
+    .srow b{color:var(--c-text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .srow b a{color:var(--c-primary);text-decoration:none}
     .srow b a:hover{text-decoration:underline}
     .srow.flash{animation:fl 1.4s}
-    @keyframes fl{0%,45%{background:#fff3bf}100%{background:transparent}}
-    #f{display:flex;gap:8px;margin-top:10px}
-    #cls{padding:10px;border:1px solid #ccc;border-radius:6px;background:#fff;max-width:230px}
-    #i{flex:1;min-width:0;padding:10px;border:1px solid #ccc;border-radius:6px}
-    button{padding:10px 18px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer}
-    button:disabled{opacity:.55;cursor:default}
+    @keyframes fl{0%,45%{background:var(--c-primary-light)}100%{background:transparent}}
 
-    /* ===== админ-вкладка ===== */
-    .acard{border:1px solid #dfe5f0;border-radius:10px;padding:10px 12px;background:#fafbfd}
-    .ahead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
-    .ahead b{color:#33415e;font-size:.95em}
-    .sm{padding:5px 10px;font-size:.8em;background:#eef2fb;color:#1d4ed8;border:1px solid #8fb0f7;border-radius:6px}
-    .sm:hover{background:#e3edff}
+    #f{display:flex;gap:8px;margin-top:10px}
+    #cls{max-width:230px;cursor:pointer}
+    #i{flex:1;min-width:0}
+
+    /* ===== карточки админки ===== */
+    .acard{border:1px solid var(--c-border-table);border-radius:var(--r);padding:15px;background:var(--c-card)}
+    .ahead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;
+        padding-bottom:8px;border-bottom:1px solid var(--c-border-soft)}
+    .ahead b{color:var(--c-text);font-size:14px;font-weight:600}
+    .sm{padding:5px 12px;font-size:12px;background:#fff;color:var(--c-text-2);border:1px solid var(--c-border)}
+    .sm:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
     .arow{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
-    .arow input{flex:1;min-width:230px;padding:9px 10px;border:1px solid #ccc;border-radius:6px}
-    button.gray{background:#64748b}
-    button.warn{background:#b45309}
-    .sb{display:inline-block;background:#fff;border:1px solid #d5dbe7;border-radius:8px;
-        padding:4px 10px;margin:2px 5px 2px 0;font-size:13px;color:#5a6478}
-    .sb b{font-size:14.5px}
-    .paused{background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;border-radius:8px;
-        padding:8px 12px;margin-bottom:6px;font-size:14px}
-    .mono{font-family:Consolas,"Courier New",monospace;font-size:12.5px;color:#39415a;
+    .arow input{flex:1;min-width:230px}
+    .sb{display:inline-block;background:#fff;border:1px solid var(--c-border-soft);border-radius:var(--r);
+        padding:4px 10px;margin:2px 5px 2px 0;font-size:13px;color:var(--c-text-2)}
+    .sb b{font-size:14px}
+    .paused{background:var(--c-err-bg);border:1px solid #ef9a9a;color:var(--c-err);border-radius:var(--r);
+        padding:8px 12px;margin-bottom:8px;font-size:13px}
+    .mono{font-family:Consolas,"Courier New",monospace;font-size:12.5px;color:var(--c-text);
         white-space:pre-wrap;word-break:break-word}
-    .mono.ok{color:#15803d}
-    .mono.bad{color:#b91c1c}
-    .tbl{width:100%;border-collapse:collapse;font-size:12.5px}
-    .tbl th{text-align:left;color:#8a94a8;font-weight:600;padding:4px 6px;border-bottom:1px solid #dfe5f0}
-    .tbl td{padding:4px 6px;border-bottom:1px solid #eef1f6;vertical-align:top;word-break:break-word}
-    .gw{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+    .mono.ok{color:var(--c-ok)}
+    .mono.bad{color:var(--c-err)}
+
+    /* ===== таблицы ===== */
+    .tbl{width:100%;border-collapse:collapse;font-size:13px}
+    .tbl th{text-align:left;color:var(--c-text-2);font-weight:600;padding:10px 12px;
+        background:var(--c-section);border-bottom:1px solid var(--c-border-table);white-space:nowrap}
+    .tbl td{padding:8px 12px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word}
+    .tbl tbody tr:hover{background:#f9f9f9}
+    .gw{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+        vertical-align:bottom}
 
     /* ===== вкладка «Промты» ===== */
     .pta{width:100%;min-height:190px;box-sizing:border-box;resize:vertical;
         font-family:Consolas,"Courier New",monospace;font-size:12.5px;line-height:1.45;
-        padding:8px 10px;border:1px solid #ccc;border-radius:6px;white-space:pre;overflow:auto}
-    .pkey{font-family:Consolas,"Courier New",monospace;font-size:11px;color:#8a94a8}
-    .pstat{font-size:12px;color:#8a94a8;margin-top:4px}
-    .pstat.err{color:#b91c1c}
+        padding:8px 10px;white-space:pre;overflow:auto}
+    .pkey{font-family:Consolas,"Courier New",monospace;font-size:11px;color:var(--c-text-3)}
+    .pstat{font-size:12px;color:var(--c-text-3);margin-top:4px}
+    .pstat.err{color:var(--c-err)}
 
     /* ===== eval ===== */
     #evalHistory tr[data-run]{cursor:pointer}
-    #evalHistory tr[data-run]:hover{background:#f6f8fc}
-    #evalHistory tr.sel{background:#e3edff}
-    .delta-up{color:#15803d;font-weight:600}
-    .delta-down{color:#b91c1c;font-weight:600}
+    #evalHistory tr[data-run]:hover{background:#f9f9f9}
+    #evalHistory tr.sel,#evalHistory tr.sel:hover{background:var(--c-primary-light)}
+    .delta-up{color:var(--c-ok);font-weight:600}
+    .delta-down{color:var(--c-err);font-weight:600}
 </style></head><body>
 <div id="top">
     <h3>Чат по базе знаний <span class="ver">v5.1</span></h3>
@@ -162,11 +227,11 @@
         <div id="nightNow" class="mono">—</div>
         <div class="arow">
             <input id="nightStart" type="time" value="23:00" style="flex:none;min-width:0;width:110px" title="Начало ночного окна">
-            <span style="color:#8a94a8">–</span>
+            <span style="color:#888">–</span>
             <input id="nightEnd" type="time" value="05:00" style="flex:none;min-width:0;width:110px" title="Конец ночного окна">
             <button type="button" id="btnNightSave">💾 Сохранить</button>
         </div>
-        <div class="mono" style="font-size:11.5px;color:#8a94a8">rag_control: night_start / night_end.
+        <div class="mono" style="font-size:11.5px;color:#888">rag_control: night_start / night_end.
             Применяется без рестарта, на все инстансы. Ночью — ночной batch, днём — дневной + лимит
             (значения — в карточке «Скорость индексации»).</div>
     </div>
@@ -176,21 +241,21 @@
             <button type="button" class="sm" id="btnSetRefresh">⟳ Обновить</button></div>
         <div id="setNow" class="mono">—</div>
         <div class="arow" style="gap:14px">
-            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Опрос, сек
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#666;gap:3px">Опрос, сек
                 <input id="setPoll" type="number" min="1" max="600"
-                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
-            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Batch день
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px"></label>
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#666;gap:3px">Batch день
                 <input id="setBatchDay" type="number" min="1" max="100"
-                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
-            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Batch ночь
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px"></label>
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#666;gap:3px">Batch ночь
                 <input id="setBatchNight" type="number" min="1" max="100"
-                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
-            <label style="display:flex;flex-direction:column;font-size:12px;color:#5a6478;gap:3px">Лимит днём, карт/час
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px"></label>
+            <label style="display:flex;flex-direction:column;font-size:12px;color:#666;gap:3px">Лимит днём, карт/час
                 <input id="setHourLimit" type="number" min="1" max="10000"
-                       style="flex:none;min-width:0;width:110px;padding:7px 8px;border:1px solid #ccc;border-radius:6px"></label>
+                       style="flex:none;min-width:0;width:110px;padding:7px 8px"></label>
             <button type="button" id="btnSetSave" style="align-self:flex-end">💾 Сохранить</button>
         </div>
-        <div class="mono" style="font-size:11.5px;color:#8a94a8">rag_control: poll_interval_sec / ingest_batch_day /
+        <div class="mono" style="font-size:11.5px;color:#888">rag_control: poll_interval_sec / ingest_batch_day /
             ingest_batch_night / day_hour_limit. Без рестарта; новый интервал опроса — с ближайшего тика.</div>
     </div>
 
@@ -207,7 +272,7 @@
     <div class="acard">
         <div class="ahead"><b>Качество поиска (eval)</b>
             <button type="button" class="sm" id="btnEvalRefresh">⟳ Обновить</button></div>
-        <div class="mono" style="font-size:11.5px;color:#8a94a8">Вопросы из dbo.rag_eval_question идут полным путём
+        <div class="mono" style="font-size:11.5px;color:#888">Вопросы из dbo.rag_eval_question идут полным путём
             поиска (embed → Chroma → реранк → дедуп) без вызова LLM; метрика — recall: попал ли ожидаемый файл
             в выдачу (ранг = позиция в выдаче). Запускать после каждого изменения: chunk size, реранк, min-score,
             промпты. Клик по строке истории — детали того прогона; Δ — сравнение с предыдущим прогоном.</div>
@@ -230,13 +295,13 @@
     <div class="acard">
         <div class="ahead"><b>Извлечение реквизитов (файл → JSON)</b>
             <button type="button" class="sm" id="btnExtRefresh">⟳ Обновить</button></div>
-        <div class="mono" style="font-size:11px;color:#8a94a8;margin-bottom:4px">Текущая схема
+        <div class="mono" style="font-size:11px;color:#888;margin-bottom:4px">Текущая схема
             (rag_control: extract_json_schema; правка — вкладка «Промты»):</div>
         <div id="extFields">—</div>
-        <div id="extDicts" class="mono" style="font-size:11px;color:#8a94a8;margin:2px 0 4px">справочники: загружаю…</div>
+        <div id="extDicts" class="mono" style="font-size:11px;color:#888;margin:2px 0 4px">справочники: загружаю…</div>
         <div class="arow">
             <input type="file" id="extFile" accept=".doc,.docx,.pdf,.rtf,.txt"
-                   style="flex:1;min-width:230px;padding:7px;border:1px solid #ccc;border-radius:6px;background:#fff">
+                   style="flex:1;min-width:230px;padding:7px">
             <button type="button" id="btnExtract"
                     title="POST /api/rag/extract — текст файла (скан → OCR) → LLM → JSON по схеме">📤 Извлечь</button>
         </div>
@@ -261,7 +326,7 @@
 <!-- ==================== вкладка «Промты» ==================== -->
 <div id="viewPrompts" hidden>
     <div class="acard">
-        <div class="mono" style="font-size:11.5px;color:#8a94a8">
+        <div class="mono" style="font-size:11.5px;color:#888">
             System-промпты лежат в dbo.rag_control и читаются перед КАЖДЫМ вопросом — изменения
             применяются сразу, без рестарта, на все инстансы. «Дефолт из кода» удаляет строку из
             таблицы: работает DEFAULT, зашитый в Java-классе (после рестарта он же просеется в БД).
@@ -271,12 +336,12 @@
     <div id="promptsList"></div>
     <div class="acard">
         <div class="ahead"><b>Проверка извлечения на файле</b></div>
-        <div class="mono" style="font-size:11.5px;color:#8a94a8">Сохранили схему или промпт выше —
+        <div class="mono" style="font-size:11.5px;color:#888">Сохранили схему или промпт выше —
             проверьте на реальном файле. Схема и промпт читаются из БД перед каждым файлом, рестарт не нужен.
             Интеграторам: тот же endpoint — POST /api/rag/extract, поле 'file'.</div>
         <div class="arow">
             <input type="file" id="extFileP" accept=".doc,.docx,.pdf,.rtf,.txt"
-                   style="flex:1;min-width:230px;padding:7px;border:1px solid #ccc;border-radius:6px;background:#fff">
+                   style="flex:1;min-width:230px;padding:7px">
             <button type="button" id="btnExtractP">📤 Извлечь</button>
         </div>
         <div id="extOutP" class="mono">Файл → /api/rag/extract → JSON по схеме из карточки выше.</div>
@@ -347,6 +412,11 @@
                 o.title = o.textContent;   // длинная подпись целиком видна при наведении
                 cls.appendChild(o);
             }
+            /* по умолчанию выбираем СТО: сначала точное совпадение, иначе — первый,
+               чьё имя начинается с «СТО» (напр. «СТО (регламент)»). Нет СТО — остаётся «Все документы». */
+            const sto = list.find(c => c.classifier === 'СТО')
+                || list.find(c => String(c.classifier ?? '').startsWith('СТО'));
+            if (sto) cls.value = sto.classifier;
         } catch (e) {
             console.warn('Классификаторы не загружены: ', e);
         }
@@ -592,8 +662,8 @@
 
     /* ---- состояние (stats + paused + indexSize + сверка embedding) ---- */
     const ST = {
-        N: ['новые', '#2563eb'], P: ['в работе', '#d97706'], I: ['проиндексировано', '#16a34a'],
-        D: ['к удалению', '#9333ea'], E: ['ошибки', '#dc2626'], X: ['вычищено', '#8a94a8']
+        N: ['новые', '#1976d2'], P: ['в работе', '#e65100'], I: ['проиндексировано', '#2e7d32'],
+        D: ['к удалению', '#7b1fa2'], E: ['ошибки', '#d32f2f'], X: ['вычищено', '#888888']
     };
 
     async function loadStats() {
@@ -605,7 +675,7 @@
             for (const [k, v] of Object.entries(j)) {
                 if (k === 'paused' || k === 'nightly') continue;   // nightly рисуем отдельно ниже
                 if (k === 'indexSize') {
-                    h += '<span class="sb" title="Векторов в ChromaDB">Chroma: <b style="color:#0f766e">'
+                    h += '<span class="sb" title="Векторов в ChromaDB">Chroma: <b style="color:#00796b">'
                         + (v < 0 ? 'недоступна' : v) + '</b></span>';
                 } else {
                     const st = ST[k] || [k, '#64748b'];
@@ -624,7 +694,7 @@
         const el = $('nightly');
         if (!el) return;
         if (!raw) {
-            el.innerHTML = '<span style="color:#8a94a8">Сверка embedding (ночью в 03:30 или кнопкой «Сверить сейчас»): ещё не выполнялась</span>';
+            el.innerHTML = '<span style="color:#888888">Сверка embedding (ночью в 03:30 или кнопкой «Сверить сейчас»): ещё не выполнялась</span>';
             return;
         }
         let n;
@@ -639,19 +709,19 @@
         const dur = n.ms == null ? '' : n.ms >= 60000
             ? (n.ms / 60000).toFixed(1).replace('.', ',') + ' мин'
             : (n.ms / 1000).toFixed(1).replace('.', ',') + ' с';
-        let verdict, color = '#15803d';
+        let verdict, color = '#2e7d32';
         if (n.result === 'ok') {
             verdict = '✓ пройдена: Chroma = MSSQL = ' + num(n.chromaAfter) + ' векторов';
         } else if (n.result === 'resynced') {
-            color = '#b45309';
+            color = '#e65100';
             verdict = '↻ было расхождение, индекс перезалит: Chroma ' + num(n.chromaBefore)
                 + ' → ' + num(n.chromaAfter) + ' (MSSQL ' + num(n.mssql) + ')';
         } else if (n.result === 'diff') {
-            color = '#b91c1c';
+            color = '#c62828';
             verdict = '⚠ после перезаливки осталось расхождение: Chroma ' + num(n.chromaAfter)
                 + ' / MSSQL ' + num(n.mssql) + ' — в Chroma есть лишние векторы';
         } else {
-            color = '#b91c1c';
+            color = '#c62828';
             verdict = '✗ ошибка: ' + esc(String(n.error || n.result || ''));
         }
         el.innerHTML = 'Последняя сверка embedding (' + when + '): '
@@ -852,7 +922,7 @@
         const pct = Math.round((r.recall ?? 0) * 100);
         return 'Прогон #' + r.runId + ' (' + new Date(r.at).toLocaleString('ru-RU') + ')'
             + (r.label ? ' — «' + esc(String(r.label)) + '»' : '')
-            + ': <b style="color:' + (pct >= 80 ? '#15803d' : pct >= 50 ? '#b45309' : '#b91c1c') + '">'
+            + ': <b style="color:' + (pct >= 80 ? '#2e7d32' : pct >= 50 ? '#e65100' : '#c62828') + '">'
             + 'recall ' + pct + '%</b> · файлов ' + r.found + '/' + r.expected
             + ' · вопросов целиком ' + r.fullPass + '/' + r.questions
             + (r.mustFail ? ' · must не прошёл: ' + r.mustFail : '')
@@ -861,9 +931,9 @@
 
     /** Δ recall (процентные пункты) к предыдущему прогону: список от API — по убыванию run_id. */
     function evalDelta(row, older) {
-        if (!older) return '<span style="color:#8a94a8">—</span>';
+        if (!older) return '<span style="color:#888888">—</span>';
         const d = Math.round(((row.recall ?? 0) - (older.recall ?? 0)) * 100);
-        if (d === 0) return '<span style="color:#8a94a8">0</span>';
+        if (d === 0) return '<span style="color:#888888">0</span>';
         return d > 0
             ? '<span class="delta-up">+' + d + '</span>'
             : '<span class="delta-down">' + d + '</span>';
@@ -906,15 +976,15 @@
     function renderEvalDetails(rows, title) {
         const el = $('evalRows');
         if (!Array.isArray(rows) || !rows.length) { el.innerHTML = ''; return; }
-        let h = title ? '<div class="mono" style="margin:4px 0 2px;color:#8a94a8">' + esc(title) + '</div>' : '';
+        let h = title ? '<div class="mono" style="margin:4px 0 2px;color:#888888">' + esc(title) + '</div>' : '';
         h += '<table class="tbl"><tr><th>вопрос</th><th>найдено</th><th>ранги</th><th>must</th><th>мс</th></tr>';
         for (const r of rows) {
             const ok = r.ok === true;
             const ranks = (r.ranks || [])
                 .map(x => x.file + ': ' + (x.rank > 0 ? '#' + x.rank : '—')).join('; ');
-            h += '<tr><td' + (ok ? '' : ' style="color:#b91c1c"') + '>'
+            h += '<tr><td' + (ok ? '' : ' style="color:#c62828"') + '>'
                 + esc(String(r.question || ''))
-                + (r.classifier ? ' <span style="color:#8a94a8">[' + esc(String(r.classifier)) + ']</span>' : '')
+                + (r.classifier ? ' <span style="color:#888888">[' + esc(String(r.classifier)) + ']</span>' : '')
                 + '</td><td>' + r.found + '/' + r.expected + '</td>'
                 + '<td style="font-size:11.5px">' + esc(ranks) + '</td>'
                 + '<td>' + (r.mustOk === false ? '⚠' : '✓') + '</td>'
@@ -1088,7 +1158,7 @@
             for (const [k, v] of Object.entries(j)) {
                 const empty = String(v ?? '').trim() === '';
                 h += '<tr><td class="mono">' + esc(k) + '</td><td'
-                    + (empty ? ' style="color:#9aa3b5"' : '') + '>'
+                    + (empty ? ' style="color:#999999"' : '') + '>'
                     + (empty ? '—' : esc(String(v))) + '</td></tr>';
             }
             const tbl = document.createElement('div');

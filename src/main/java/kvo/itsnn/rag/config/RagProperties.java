@@ -35,7 +35,7 @@ public record RagProperties(
             @DefaultValue("512")  int maxTokens,  // обрезка пары «вопрос+фрагмент»
             @DefaultValue("8")    int batch,      // пар за один прогон ONNX Runtime
             @DefaultValue("32")   int passages,   // сколько верхних кандидатов реранчить за волну
-            @DefaultValue("0.05") double minScore) {}   // 0 — фильтр выключен) {}
+            @DefaultValue("0.05") double minScore) {}   // 0 — фильтр выключен
 
     // было 1200/200 — снижено из-за лимита 512 токенов у модели
     public record Chunk(@DefaultValue("400") int targetChars,

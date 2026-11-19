@@ -1,4 +1,15 @@
 По всем вопросам Лоции звонить Фролову Сергею frolovsa@lodsen.ru
+Пред настройка:
+Все модели (bge-reranker-v2-m3, multilingual-e5-small) должны хранится в каталоге
+C:\models
+
+Установка Chroma в каталоге - C:\Users\KvochkinAY\chroma_project
+БД Chroma должна хранится в каталоге
+C:\chroma_data
+
+старт Chroma DB (--host 127.0.0.1 если нужно отвечать только локальному ПК):
+cd C:\Users\KvochkinAY\chroma_project
+C:\Users\KvochkinAY\chroma_project\venv\Scripts\chroma.exe run --path C:\chroma_data --host 0.0.0.0 --port 8000
 
                         ЛОКАЛЬНО (ваш Spring)                                НАРУЖУ
 ┌──────────────────────────────────────────────────────────────────────────────┐

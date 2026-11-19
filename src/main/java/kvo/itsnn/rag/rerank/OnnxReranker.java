@@ -71,7 +71,11 @@ public class OnnxReranker implements Reranker, AutoCloseable {
                 s = environment.createSession(onnx.toString(), opt);
             }
         } catch (Exception | UnsatisfiedLinkError e) {   // нет нативов / битный onnx — не повод валить приложение
-            try { t.close(); } catch (Exception ignore) { }
+            try {
+                t.close();
+            } catch (Exception closeEx) {   // падение close не должно маскировать исходную причину
+                e.addSuppressed(closeEx);   // → уедет в стек под "Suppressed:"
+            }
             throw new IllegalStateException("реранкер: ONNX-сессия не создана (" + onnx + "): "
                     + e.getMessage(), e);
         }
@@ -179,7 +183,17 @@ public class OnnxReranker implements Reranker, AutoCloseable {
 
     @Override
     public void close() {
-        try { session.close(); } catch (Exception ignore) { }
-        try { tokenizer.close(); } catch (Exception ignore) { }
+        closeQuietly(session, "ONNX-сессия");
+        closeQuietly(tokenizer, "токенизатор");
+    }
+    /** Best-effort освобождение нативных ресурсов: падение одного close не должно прерывать
+     *  остальные. Уровень warn — сессия/токенизатор держат гигабайты нативной памяти,
+     *  потерянный close = утечка, её должно быть видно. */
+    private static void closeQuietly(AutoCloseable c, String what) {
+        try {
+            c.close();
+        } catch (Exception e) {
+            log.warn("реранкер: {} не закрылся", what, e);
+        }
     }
 }

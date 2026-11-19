@@ -32,6 +32,17 @@ public class EvalService {
     private static final Logger log = LoggerFactory.getLogger(EvalService.class);
     private static final ObjectMapper JSON = JsonMapper.builder().build();
 
+    // Ключи JSON-выдачи/деталей: литералы в нескольких методах — только через константы
+    private static final String EXPECTED = "expected";
+    private static final String FOUND = "found";
+    private static final String MS = "ms";
+    private static final String QUESTIONS = "questions";
+    private static final String RECALL = "recall";
+    private static final String LABEL = "label";
+    private static final String FULL_PASS = "fullPass";
+    private static final String RUN_ID = "runId";
+    private static final String DETAILS = "details";
+
     private final JdbcTemplate jdbc;
     private final AskService ask;
     /** Один прогон на инстанс: retrieveTop гоняет реранкер на CPU — параллелить незачем. */
@@ -46,6 +57,10 @@ public class EvalService {
     public record Question(int questionId, String question, String classifier,
                            String expectFiles, String expectMust, String note) {}
 
+    /** Итог по одному вопросу: строка для details + числа для агрегатов прогона. */
+    private record QuestionResult(Map<String, Object> row, int expected, int found,
+                                  boolean mustOk, boolean ok) {}
+
     /** Полный прогон; результат — сводка + details по каждому вопросу. */
     public Map<String, Object> run(String label) {
         if (!busy.compareAndSet(false, true))
@@ -57,41 +72,18 @@ public class EvalService {
                         "в dbo.rag_eval_question нет включённых вопросов — добавьте хотя бы один");
 
             long t0 = System.currentTimeMillis();
-            int expectedTotal = 0, foundTotal = 0, fullPass = 0, mustFail = 0;
+            int expectedTotal = 0;
+            int foundTotal = 0;
+            int fullPass = 0;
+            int mustFail = 0;
             List<Map<String, Object>> rows = new ArrayList<>(questions.size());
-
             for (Question q : questions) {
-                long q0 = System.currentTimeMillis();
-                List<AskService.Retrieved> top = ask.retrieveTop(q.question(), q.classifier());
-
-                List<String> wants = split(q.expectFiles());
-                int expected = wants.size(), found = 0;
-                List<Map<String, Object>> ranks = new ArrayList<>(expected);
-                for (String w : wants) {
-                    int rank = rankOf(top, w);
-                    if (rank > 0) found++;
-                    ranks.add(Map.of("file", w, "rank", rank));
-                }
-                String context = top.stream().map(AskService.Retrieved::text)
-                        .collect(Collectors.joining("\n"));
-                boolean mustOk = mustIn(context, q.expectMust());
-                if (!mustOk) mustFail++;
-                boolean ok = expected > 0 && found == expected && mustOk;
-                if (ok) fullPass++;
-                expectedTotal += expected;
-                foundTotal += found;
-
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("questionId", q.questionId());
-                row.put("question", q.question());
-                row.put("classifier", q.classifier() == null ? "" : q.classifier());
-                row.put("expected", expected);
-                row.put("found", found);
-                row.put("mustOk", mustOk);
-                row.put("ok", ok);
-                row.put("ranks", ranks);
-                row.put("ms", System.currentTimeMillis() - q0);
-                rows.add(row);
+                QuestionResult r = evalQuestion(q);
+                expectedTotal += r.expected();
+                foundTotal += r.found();
+                if (!r.mustOk()) mustFail++;
+                if (r.ok()) fullPass++;
+                rows.add(r.row());
             }
 
             long ms = System.currentTimeMillis() - t0;
@@ -101,20 +93,22 @@ public class EvalService {
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, nz(label), questions.size(), expectedTotal, foundTotal, recall, fullPass, ms,
                     JSON.writeValueAsString(rows));
-            log.info("EVAL: {} вопросов, recall={}, full_pass={}, {} мс",
-                    questions.size(), String.format(Locale.ROOT, "%.3f", recall), fullPass, ms);
+            if (log.isInfoEnabled()) {   // S2629: String.format не гоняем при выключенном INFO
+                log.info("EVAL: {} вопросов, recall={}, full_pass={}, {} мс",
+                        questions.size(), String.format(Locale.ROOT, "%.3f", recall), fullPass, ms);
+            }
 
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("result", "done");
-            out.put("label", nz(label));
-            out.put("questions", questions.size());
-            out.put("expected", expectedTotal);
-            out.put("found", foundTotal);
-            out.put("recall", recall);
-            out.put("fullPass", fullPass);
+            out.put(LABEL, nz(label));
+            out.put(QUESTIONS, questions.size());
+            out.put(EXPECTED, expectedTotal);
+            out.put(FOUND, foundTotal);
+            out.put(RECALL, recall);
+            out.put(FULL_PASS, fullPass);
             out.put("mustFail", mustFail);
-            out.put("ms", ms);
-            out.put("details", rows);
+            out.put(MS, ms);
+            out.put(DETAILS, rows);
             return out;
         } finally {
             busy.set(false);
@@ -131,13 +125,16 @@ public class EvalService {
                 rs.getString(4), rs.getString(5), rs.getString(6)));
     }
 
+    /** Добавление вопроса; возвращает сгенерированный БД question_id. */
     public int addQuestion(String question, String classifier, String expectFiles,
                            String expectMust, String note) {
-        return jdbc.queryForObject("""
+        Integer id = jdbc.queryForObject("""
                 INSERT INTO dbo.rag_eval_question (question, classifier, expect_files, expect_must, note)
                 OUTPUT INSERTED.question_id
                 VALUES (?, ?, ?, ?, ?)
                 """, Integer.class, question, classifier, expectFiles, expectMust, note);
+        // queryForObject возвращает null, если колонка оказалась NULL — распаковка в int дала бы NPE
+        return Objects.requireNonNull(id, "INSERT dbo.rag_eval_question не вернул question_id");
     }
 
     public void deleteQuestion(int id) {
@@ -150,15 +147,15 @@ public class EvalService {
                 FROM dbo.rag_eval_run ORDER BY run_id DESC
                 """, (rs, i) -> {
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("runId", rs.getInt(1));
+            m.put(RUN_ID, rs.getInt(1));
             m.put("at", rs.getTimestamp(2).toString());
-            m.put("label", nz(rs.getString(3)));
-            m.put("questions", rs.getInt(4));
-            m.put("expected", rs.getInt(5));
-            m.put("found", rs.getInt(6));
-            m.put("recall", rs.getDouble(7));
-            m.put("fullPass", rs.getInt(8));
-            m.put("ms", rs.getInt(9));
+            m.put(LABEL, nz(rs.getString(3)));
+            m.put(QUESTIONS, rs.getInt(4));
+            m.put(EXPECTED, rs.getInt(5));
+            m.put(FOUND, rs.getInt(6));
+            m.put(RECALL, rs.getDouble(7));
+            m.put(FULL_PASS, rs.getInt(8));
+            m.put(MS, rs.getInt(9));
             return m;
         }, limit);
     }
@@ -170,12 +167,44 @@ public class EvalService {
         if (raw.isEmpty() || raw.getFirst() == null)
             throw new IllegalArgumentException("прогона с run_id=" + runId + " нет");
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("runId", runId);
-        out.put("details", JSON.readValue(raw.getFirst(), List.class));
+        out.put(RUN_ID, runId);
+        out.put(DETAILS, JSON.readValue(raw.getFirst(), List.class));
         return out;
     }
 
     /* ---------- внутреннее ---------- */
+
+    /** Оценивает один вопрос тем же путём, что и пользовательский запрос; замер времени — на вопрос. */
+    private QuestionResult evalQuestion(Question q) {
+        long q0 = System.currentTimeMillis();
+        List<AskService.Retrieved> top = ask.retrieveTop(q.question(), q.classifier());
+
+        List<String> wants = split(q.expectFiles());
+        int expected = wants.size();
+        int found = 0;
+        List<Map<String, Object>> ranks = new ArrayList<>(expected);
+        for (String w : wants) {
+            int rank = rankOf(top, w);
+            if (rank > 0) found++;
+            ranks.add(Map.of("file", w, "rank", rank));
+        }
+        String context = top.stream().map(AskService.Retrieved::text)
+                .collect(Collectors.joining("\n"));
+        boolean mustOk = mustIn(context, q.expectMust());
+        boolean ok = expected > 0 && found == expected && mustOk;
+
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("questionId", q.questionId());
+        row.put("question", q.question());
+        row.put("classifier", q.classifier() == null ? "" : q.classifier());
+        row.put(EXPECTED, expected);
+        row.put(FOUND, found);
+        row.put("mustOk", mustOk);
+        row.put("ok", ok);
+        row.put("ranks", ranks);
+        row.put(MS, System.currentTimeMillis() - q0);
+        return new QuestionResult(row, expected, found, mustOk, ok);
+    }
 
     private List<Question> loadQuestions() {
         return jdbc.query("""

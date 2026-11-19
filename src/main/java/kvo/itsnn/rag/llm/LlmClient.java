@@ -32,6 +32,10 @@ public class LlmClient {
      *  и конвертеры Spring выбрасывали "Error while extracting response". */
     private static final ObjectMapper JSON = JsonMapper.builder().build();
 
+    /** Лог исходящего тела: RAG-контекст длинный (до 15 000 симв.) — обрезаем;
+     *  самопроверка llm-selftest помещается целиком. Поднимите, если нужно всё. */
+    private static final int MAX_REQ_LOG = 4_000;
+
     private final RestClient http;
     private final LlmProperties cfg;
 
@@ -45,71 +49,121 @@ public class LlmClient {
                 .defaultHeader("Authorization", "Bearer " + cfg.apiKey())
                 .requestFactory(f)
                 .build();
-        log.info("LlmClient: url='{}', model='{}', maxTokens={}, temperature={}, timeout={} с, thinking={}",
-                cfg.baseUrl(), cfg.model(), cfg.maxTokens(), cfg.temperature(), cfg.timeoutSeconds(),
-                cfg.disableThinking() ? "выключен" : "включён");
+        if (log.isInfoEnabled()) {
+            log.info("LlmClient: url='{}', model='{}', maxTokens={}, temperature={}, timeout={} с, thinking={}",
+                    cfg.baseUrl(), cfg.model(), cfg.maxTokens(), cfg.temperature(), cfg.timeoutSeconds(),
+                    cfg.disableThinking() ? "выключен" : "включён");
+        }
     }
 
     public String chat(List<Message> messages) {
         String url = cfg.baseUrl().replaceAll("/+$", "") + "/chat/completions";
         long t0 = System.currentTimeMillis();
-        // vLLM: размышления Qwen3 выключаем на уровне chat-шаблона — быстрее и дешевле
+        Request payload = buildRequest(messages);
+        // >>> исходящий запрос в интернет: строка и тело ровно те, что уходят в сеть без token api-key.
+        // S2629: сериализация тела для лога дорогая (весь RAG-контекст) — только при включённом INFO.
+        if (log.isInfoEnabled()) {
+            log.info(">>> LLM POST {} тело: {}", url, reqBodyForLog(payload));
+        }
+        Response resp = parseResponse(post(url, payload), url);
+        Response.Choice c = firstChoice(resp, url);
+        warnIfTruncated(c);
+        logTiming(t0, messages, resp);
+        return answerText(c, resp);
+    }
+
+    /** vLLM: размышления Qwen3 выключаем на уровне chat-шаблона — быстрее и дешевле. */
+    private Request buildRequest(List<Message> messages) {
         Map<String, Object> noThink = cfg.disableThinking()
                 ? Map.of("enable_thinking", false) : null;
-        String raw;
+        return new Request(cfg.model(), messages, cfg.temperature(), cfg.maxTokens(), noThink);
+    }
+
+    /** POST к шлюзу; byte[] читается при любом content-type. Ошибка HTTP → IllegalStateException с подсказкой. */
+    private String post(String url, Request payload) {
         try {
             byte[] bytes = http.post()
                     .uri("/chat/completions")
                     .accept(MediaType.APPLICATION_JSON)   // шлюзу намекаем, что ждём JSON
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(new Request(cfg.model(), messages, cfg.temperature(), cfg.maxTokens(), noThink))
+                    .body(payload)                        // тот же объект, что записан в лог выше
                     .retrieve()
-                    .body(byte[].class);                  // byte[] читается при любом content-type
-            raw = bytes == null ? "" : new String(bytes, StandardCharsets.UTF_8);
+                    .body(byte[].class);
+            String raw = bytes == null ? "" : new String(bytes, StandardCharsets.UTF_8);
             log.debug("LLM RAW: {}", raw);
+            if (raw.isBlank()) {
+                throw new IllegalStateException("LLM: пустой ответ от " + url);
+            }
+            return raw;
         } catch (RestClientResponseException e) {
             throw new IllegalStateException("LLM " + e.getStatusCode().value() + " на " + url
                     + hint(e.getStatusCode().value()) + ": " + brief(e.getResponseBodyAsString()), e);
         }
-        if (raw.isBlank()) throw new IllegalStateException("LLM: пустой ответ от " + url);
+    }
 
-        Response resp;
+    private Response parseResponse(String raw, String url) {
         try {
-            resp = JSON.readValue(raw, Response.class);
+            return JSON.readValue(raw, Response.class);
         } catch (Exception e) {
             throw new IllegalStateException("LLM: ответ не JSON от " + url + ": " + brief(raw), e);
         }
-        if (resp.choices() == null || resp.choices().isEmpty())
-            throw new IllegalStateException("LLM: пустой ответ от " + url);
+    }
 
-        Response.Choice c = resp.choices().get(0);
-        if ("length".equals(c.finish_reason())) {
+    private Response.Choice firstChoice(Response resp, String url) {
+        if (resp.choices() == null || resp.choices().isEmpty()) {
+            throw new IllegalStateException("LLM: пустой ответ от " + url);
+        }
+        return resp.choices().get(0);
+    }
+
+    private void warnIfTruncated(Response.Choice c) {
+        if ("length".equals(c.finish_reason()) && log.isWarnEnabled()) {
             log.warn("LLM: ответ обрезан (finish_reason=length) — лимит max_tokens={}; поднимите rag.llm.max-tokens",
                     cfg.maxTokens());
         }
-        log.info("LLM: {} мс, сообщений={}, tokens={}",
-                System.currentTimeMillis() - t0, messages.size(),
-                resp.usage() == null ? "?" : resp.usage().total_tokens());
+    }
 
+    private void logTiming(long t0, List<Message> messages, Response resp) {
+        if (log.isInfoEnabled()) {
+            log.info("<<< LLM {} мс, сообщений={}, tokens={}",
+                    System.currentTimeMillis() - t0, messages.size(), totalTokens(resp));
+        }
+    }
+
+    /** Qwen3 (thinking) может положить весь ответ в поле размышлений, оставив content пустым, — берём его. */
+    private String answerText(Response.Choice c, Response resp) {
         String text = stripThink(c.message().content());
         if (text.isBlank()) {
-            // Qwen3 (thinking) может положить весь ответ в поле размышлений, оставив content пустым;
-            // vLLM 0.28 называет его "reasoning", другие шлюзы — "reasoning_content" — берём любой
-            String r = c.message().reasoning_content() != null
-                    ? c.message().reasoning_content() : c.message().reasoning();
-            String reasoning = stripThink(r);
+            String reasoning = stripThink(firstNonNull(c.message().reasoning_content(), c.message().reasoning()));
             if (!reasoning.isBlank()) {
-                log.warn("LLM: content пуст — ответ собран из размышлений ({} симв.)", reasoning.length());
+                if (log.isWarnEnabled()) {
+                    log.warn("LLM: content пуст — ответ собран из размышлений ({} симв.)", reasoning.length());
+                }
                 text = reasoning;
             }
         }
         if (text.isBlank()) {
             throw new IllegalStateException("LLM: модель не вернула текст ответа (finish_reason="
-                    + c.finish_reason() + ", tokens="
-                    + (resp.usage() == null ? "?" : resp.usage().total_tokens())
+                    + c.finish_reason() + ", tokens=" + totalTokens(resp)
                     + ") — вероятно, весь лимит израсходован на блок размышлений");
         }
         return text;
+    }
+
+    private static String firstNonNull(String a, String b) {
+        return a != null ? a : b;
+    }
+
+    private static String totalTokens(Response resp) {
+        return resp.usage() == null ? "?" : String.valueOf(resp.usage().total_tokens());
+    }
+
+    /** Тело запроса одной строкой для лога; длинное — с обрезкой и счётчиком. */
+    private String reqBodyForLog(Request payload) {
+        String json = JSON.writeValueAsString(payload);   // Jackson 3: исключение unchecked
+        return json.length() > MAX_REQ_LOG
+                ? json.substring(0, MAX_REQ_LOG) + "…(обрезано, всего " + json.length() + " симв.)"
+                : json;
     }
 
     private static String stripThink(String s) {

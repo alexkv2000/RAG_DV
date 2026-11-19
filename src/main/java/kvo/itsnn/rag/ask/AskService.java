@@ -208,11 +208,14 @@ public class AskService {
         for (int i = 0; i < Math.min(3, out.size()); i++) {
             top3.add(String.format(Locale.ROOT, "%.3f", out.get(i).score()));
         }
-        log.info("retrieve: реранк {} пар за {} мс ({}), топ-3 скора: {}",
-                pairs, System.currentTimeMillis() - t0, reranker.model(), String.join(", ", top3));
+        // S2629: вызовы/склейки вычисляем ДО лог-вызова и передаём переменными
+        long ms = System.currentTimeMillis() - t0;
+        String model = reranker.model();
+        String top = String.join(", ", top3);
+        log.info("retrieve: реранк {} пар за {} мс ({}), топ-3 скора: {}", pairs, ms, model, top);
         if (!out.isEmpty() && out.get(0).score() < garbage) {
-            log.warn("retrieve: лучший скор реранка {} — релевантных фрагментов в кандидатах нет "
-                    + "(проверьте /api/rag/search этим же вопросом)", top3.get(0));
+            String best = top3.get(0);   // top3 непуст: out был непустым при его сборке
+            log.warn("retrieve: лучший скор реранка {} — релевантных фрагментов в кандидатах нет (проверьте /api/rag/search этим же вопросом)", best);
         }
         double min = props.rerank() == null ? 0.0 : props.rerank().minScore();
         if (min > 0) {
