@@ -1,20 +1,23 @@
 package kvo.itsnn.rag.ask;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import kvo.itsnn.rag.config.LlmProperties;
 import kvo.itsnn.rag.ingest.ContentLoader;
 import kvo.itsnn.rag.ingest.TextExtractor;
 import kvo.itsnn.rag.llm.LlmClient;
+import kvo.itsnn.rag.util.SessionCaches;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 /**
  * Прямой чат с LLM (rag.llm.base-url) — без эмбеддингов, Chroma и rag_control.
  * Отдельные сессии от RAG-чата.
+ * Сессии — кэш Caffeine с TTL rag.llm.session-ttl-minutes (0 — бессрочно):
+ * брошенная сессия удаляется из памяти ВМЕСТЕ с прикреплёнными файлами.
  * Прикреплённые файлы: текст извлекается тем же TextExtractor, что и индексация
  * (pdf-скан без текстового слоя автоматически уходит в OCR), обрезается до лимита
  * и подставляется в КАЖДЫЙ вопрос сессии, пока файл не открепят. В историю реплик
@@ -47,7 +50,7 @@ public class DirectChatService {
     private final LlmClient llm;
     private final DirectChatPromptProvider prompts;
     private final TextExtractor extractor;
-    private final Map<String, Session> sessions = new ConcurrentHashMap<>();
+    private final Cache<String, Session> sessions;
 
     /**
      * Сессия: история реплик + прикреплённые файлы.
@@ -131,16 +134,19 @@ public class DirectChatService {
         this.extractor = extractor;
         this.maxFileChars = Math.max(1, cfg.directMaxFileChars());
         this.maxSessionTokens = Math.max(1, cfg.directMaxSessionTokens());
+        this.sessions = SessionCaches.withTtl(cfg.sessionTtlMinutes());
         log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. по {} симв., "
-                        + "бюджет сессии {} токенов (rag.llm.direct-max-file-chars / direct-max-session-tokens)",
-                cfg.model(), cfg.historyTurns(), MAX_FILES, maxFileChars, maxSessionTokens);
+                        + "бюджет сессии {} токенов, TTL сессии {} (rag.llm.direct-max-file-chars "
+                        + "/ direct-max-session-tokens / session-ttl-minutes)",
+                cfg.model(), cfg.historyTurns(), MAX_FILES, maxFileChars, maxSessionTokens,
+                cfg.sessionTtlMinutes() <= 0 ? "∞" : cfg.sessionTtlMinutes() + " мин");
     }
 
     public record DirectReply(String sessionId, String answer) {}
 
     public DirectReply chat(String sessionId, String message) {
         String sid = (sessionId == null || sessionId.isBlank()) ? UUID.randomUUID().toString() : sessionId;
-        Session s = sessions.computeIfAbsent(sid, k -> new Session());
+        Session s = sessions.get(sid, k -> new Session());
 
         List<LlmClient.Message> messages = new ArrayList<>();
         messages.add(LlmClient.Message.system(prompts.prompt()));
@@ -169,7 +175,7 @@ public class DirectChatService {
         String text = extractText(name, ext, bytes);
         int tokens = estimateTokens(text);
 
-        Session s = sessions.computeIfAbsent(sid, k -> new Session());
+        Session s = sessions.get(sid, k -> new Session());
         s.putFile(name, text, tokens, MAX_FILES, maxSessionTokens);
         log.info("DIRECT: файл '{}' прикреплён к сессии ({} симв. ≈ {} ток., сессия {}/{})",
                 name, text.length(), tokens, s.usedTokens(), maxSessionTokens);
@@ -178,7 +184,7 @@ public class DirectChatService {
 
     /** Открепить файл по имени; несуществующее имя — молча no-op. */
     public List<FileInfo> removeFile(String sessionId, String name) {
-        Session s = sessions.get(normSid(sessionId));
+        Session s = sessions.getIfPresent(normSid(sessionId));
         if (s != null && name != null && !name.isBlank()) {
             s.removeFile(name.strip());
         }
@@ -187,13 +193,13 @@ public class DirectChatService {
 
     /** Список файлов сессии (восстановление UI после перезагрузки страницы). */
     public List<FileInfo> files(String sessionId) {
-        Session s = sessions.get(normSid(sessionId));
+        Session s = sessions.getIfPresent(normSid(sessionId));
         return s == null ? List.of() : s.filesInfo();
     }
 
     /** Удаление реплик из истории сессии — аналог ChatService.deleteMessages. */
     public int deleteMessages(String sessionId, String role, String content) {
-        Session s = sessions.get(normSid(sessionId));
+        Session s = sessions.getIfPresent(normSid(sessionId));
         if (s == null) return 0;
         boolean all = content == null || content.isBlank();
         int before = s.history.size();

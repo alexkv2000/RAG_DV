@@ -214,6 +214,7 @@ public class ContentLoader {
                     }
                     c.close();
                 } catch (SQLException e) {
+                    closeQuietly(c);
                     log.debug("Соединение с '{}' переоткроем: {}", storage, e.getMessage());
                 }
                 conns.remove(storage);

@@ -1,5 +1,6 @@
 package kvo.itsnn.rag.ingest;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import kvo.itsnn.rag.config.RagProperties;
 import net.sourceforge.tess4j.Tesseract;
@@ -53,21 +54,36 @@ public class OcrService {
     public OcrService(RagProperties props) {
         this.cfg = props.ocr();
     }
-
+    @PostConstruct
+    void warmUp() { //при старте создаем первый инстанс (прогрев системы)
+        if (!cfg.enabled()) return;
+        PooledTesseract t = acquire();
+        try {
+            pool.offer(t);        // первый инстанс живёт с самого старта
+        } catch (Exception e) {
+            release(t);
+            throw e;
+        }
+    }
     /** Взять инстанс: сначала пул; пусто и лимит живых исчерпан — ждать до ACQUIRE_WAIT_MS,
      *  дальше — 503 «повторите позже» (ingest вернёт документ в очередь без штрафа). */
     private PooledTesseract acquire() {
         PooledTesseract t = pool.poll();
         if (t != null) return t;                  // инстанс из пула — пермит уже «принадлежит» ему
         try {
-            if (!permits.tryAcquire(ACQUIRE_WAIT_MS, TimeUnit.MILLISECONDS)) { //ожидание очереди 60 секунд для Tesseract
+            if (!permits.tryAcquire(ACQUIRE_WAIT_MS, TimeUnit.MILLISECONDS)) {
                 throw new EmbeddingServiceException("OCR: все инстансы заняты — повторите позже", null);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new EmbeddingServiceException("OCR: прервано ожидание инстанса", e);
+            throw new EmbeddingServiceException("OCR: прервано ожидание Tesseract инстанса", e);
         }
-        return newTesseract();                    // право на новый инстанс получено
+        try {
+            return newTesseract();                // право на новый инстанс получено
+        } catch (Exception e) {                   // создание не удалось — пермит возвращается в семафор
+            permits.release();
+            throw new EmbeddingServiceException("OCR: не удалось создать инстанс Tesseract", e);
+        }
     }
     /** Вернуть инстанс в пул; пул полон — закрыть и вернуть пермит. */
     private void release(PooledTesseract t) {

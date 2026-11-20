@@ -170,15 +170,20 @@ public class DocSummaryService {
         List<String> vers = files.stream().map(FileHit::version)
                 .filter(Objects::nonNull).distinct().sorted().toList();
         log.info("SUMMARY: {} — версии {} нет, есть {}", code, want, vers);
+        String versionsPart = vers.isEmpty()
+                ? "У найденных файлов этого документа версия не указана в названии."
+                : "Доступны версии: " + String.join(", ", vers) + ".";
+        String advice = vers.isEmpty()
+                ? ""
+                : " Откройте нужную по ссылкам в источниках ниже или спросите, например: "
+                + "«краткое содержание " + code + " версия " + vers.getFirst() + "».";
         List<AskService.Source> sources = files.stream()
                 .map(f -> new AskService.Source(f.documentGuid(), f.fileName(), 0, 1.0,
                         props.docCardUrl(f.fileId())))
                 .toList();
         return new AskService.AskResult(
-                "В базе знаний нет документа " + code + " версии " + want + ". Доступны версии: "
-                        + String.join(", ", vers) + ". Откройте нужную по ссылкам в источниках ниже"
-                        + " или спросите, например: «краткое содержание " + code + " версия "
-                        + vers.getFirst() + "».", sources);
+                "В базе знаний нет документа " + code + " версии " + want + ". " + versionsPart + advice,
+                sources);
     }
 
     /** Первые фрагменты файла — титул, назначение, область применения. */

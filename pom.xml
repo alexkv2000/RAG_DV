@@ -108,6 +108,11 @@
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
         </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+            <!-- версию управляет spring-boot-dependencies BOM -->
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>

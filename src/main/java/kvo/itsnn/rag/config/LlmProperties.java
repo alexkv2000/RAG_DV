@@ -22,5 +22,10 @@ public record LlmProperties(
         @DefaultValue("120000") int directMaxFileChars,
         /* Оценочный бюджет токенов на ВСЕ прикреплённые файлы сессии свободного чата:
            контекст Qwen3 131 072 − max-tokens 4 096 − история (3 ответа × 4 096) и вопрос ≈ 110 тыс. */
-        @DefaultValue("100000") int directMaxSessionTokens) {
+        @DefaultValue("100000") int directMaxSessionTokens,
+        /* TTL сессий чата (RAG и свободного), минут: неактивная дольше — удаляется из памяти
+           вместе с прикреплёнными файлами. localStorage клиента живёт дольше — вернувшемуся
+           пользователю лента останется, но история для LLM начнётся заново.
+           0 — бессрочно, как раньше (Map без очистки). */
+        @DefaultValue("30") int sessionTtlMinutes) {
 }

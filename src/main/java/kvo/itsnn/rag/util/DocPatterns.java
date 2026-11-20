@@ -79,8 +79,8 @@ public final class DocPatterns {
     public static double versionKey(String v) {
         if (v == null) return -1;
         String[] p = v.split("\\.");
-        double d = p.length > 0 ? Integer.parseInt(p[0]) * 1000.0 : 0;
-        if (p.length > 1) d += Integer.parseInt(p[1]);
+        double d = p.length > 0 ? Long.parseLong(p[0]) * 1000.0 : 0;
+        if (p.length > 1) d += Long.parseLong(p[1]);
         return d;
     }
 }
