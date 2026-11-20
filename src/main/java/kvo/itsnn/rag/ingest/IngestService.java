@@ -31,6 +31,7 @@ public class IngestService {
     private final VectorIndex index;                   // теперь ChromaDB
     private final TransactionTemplate tx;
     private final RagProperties props;
+    private static final byte[] NO_BYTES = {};
 
     /**
      * Машиночитаемые конверты: семантики в них нет, шум в выдаче — пропускаем целиком.
@@ -100,7 +101,6 @@ public class IngestService {
                 System.currentTimeMillis() - t0);
     }
 
-    /** Результат потокового извлечения: чанки, инкрементальный хэш, признак «был файл с байтами». */
     private record Extracted(List<ChunkPart> parts, MessageDigest digest, boolean sawContentFile) {}
     private Extracted extractParts(DocumentRef ref, List<ContentLoader.FileMeta> metas) {
         List<ChunkPart> parts = new ArrayList<>();
@@ -108,9 +108,8 @@ public class IngestService {
         boolean sawContentFile = false;
         boolean first = true;
         for (ContentLoader.FileMeta m : metas) {
-            if (isMachineEnvelope(m.fileName())) continue;
-            byte[] bytes = contentLoader.loadBytes(ref.guid(), m);   // null — файла нет, причина в логе
-            if (bytes == null) continue;                             // как раньше: файл не попадал в files
+            byte[] bytes = contentBytes(ref, m);
+            if (bytes.length == 0) continue;              // единственный continue (Sonar S135)
             sawContentFile = true;
             for (ChunkPart p : safeExtract(ref, m, bytes)) {
                 // байт-в-байт то же, что Sha256.of(String.join("\u0001", texts)) — хэши совместимы
@@ -122,6 +121,14 @@ public class IngestService {
             // bytes недостижимы дальше — GC заберёт сразу после итерации
         }
         return new Extracted(parts, digest, sawContentFile);
+    }
+    /** Байты файла, пригодного к извлечению; пустой массив — машинный конверт
+     *  или бинарника нет (причина пустоты — в логе ContentLoader). */
+    private byte[] contentBytes(DocumentRef ref, ContentLoader.FileMeta m) {
+        if (isMachineEnvelope(m.fileName())) {
+            return NO_BYTES;                              // семантики нет, шум в выдаче — пропускаем
+        }
+        return contentLoader.loadBytes(ref.guid(), m);
     }
     /** Извлечение и чанкование ОДНОГО файла; байты живут только в этом кадре стека. */
     private List<ChunkPart> safeExtract(DocumentRef ref, ContentLoader.FileMeta m, byte[] bytes) {

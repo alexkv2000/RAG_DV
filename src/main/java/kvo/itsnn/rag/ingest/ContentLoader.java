@@ -19,7 +19,7 @@ public class ContentLoader {
 
     private static final Logger log = LoggerFactory.getLogger(ContentLoader.class);
     private static final long MAX_FILE_BYTES = 64L * 1024 * 1024;
-    /** «Нет данных» — вместо null (Sonar: пустой массив вместо null). */
+    /** «Нет данных» — вместо null (Sonar S1168: пустой массив вместо null). */
     private static final byte[] NO_BYTES = {};
 
     public record LoadedFile(UUID fileId, String fileName, String ext, byte[] bytes) {
@@ -56,9 +56,9 @@ public class ContentLoader {
         this.jdbc = jdbc;
         this.maxFileBytes = (props.content() == null || props.content().maxFileMb() <= 0
                 ? 64 : props.content().maxFileMb()) * 1024L * 1024L;
-        Map<String, String> disk = new LinkedHashMap<>();          // было две переменных в одной строке
+        Map<String, String> disk = new LinkedHashMap<>();
         Map<String, String> arc = new LinkedHashMap<>();
-        if (props.content() != null && props.content().roots() != null) {   // тело в фигурных скобках
+        if (props.content() != null && props.content().roots() != null) {
             props.content().roots().forEach((k, v) -> {
                 if (v == null || v.isBlank()) {
                     return;
@@ -74,9 +74,11 @@ public class ContentLoader {
         this.archives = Map.copyOf(arc);
         log.info("Контент: диск {}, архивы {}, лимит файла {} МБ", diskRoots.keySet(), archives.keySet(), maxFileBytes / 1024 / 1024);
     }
+
     /** Файл карточки без байтов: метаданные + место хранения. Единица потоковой индексации. */
     public record FileMeta(UUID fileId, String fileName, String ext, String storageName,
                            String filePath, long declaredSize, boolean contentInDb) {}
+
     /** Метаданные файлов карточки; content НЕ читается (DATALENGTH не материализует блоб). */
     public List<FileMeta> loadMeta(UUID guid) {
         return jdbc.query("""
@@ -91,6 +93,7 @@ public class ContentLoader {
             return out;
         }, guid);
     }
+
     private Optional<FileMeta> metaOf(ResultSet rs, UUID guid) throws SQLException {
         String name = rs.getString("file_name");
         long declared = rs.getLong("file_size");
@@ -101,18 +104,22 @@ public class ContentLoader {
         return Optional.of(new FileMeta(UUID.fromString(rs.getString("file_id")), name, extOf(name),
                 rs.getString("storage_name"), rs.getString("file_path"), declared, rs.getInt("in_db") == 1));
     }
+
     /** Байты ОДНОГО файла: стор Database — из основной БД, внешний — шара/архив.
-     *  null — бинарника нет / больше лимита (причина в логе), вызывающий пропускает файл. */
+     *  ПУСТОЙ МАССИВ — бинарника нет / больше лимита (причина в логе);
+     *  вызывающий проверяет isEmpty и пропускает файл (Sonar S1168: массив вместо null). */
     public byte[] loadBytes(UUID guid, FileMeta m) {
         byte[] data = m.contentInDb() ? dbContent(guid, m) : NO_BYTES;
-        if (isEmpty(data)) data = resolveExternal(m, guid);
+        if (isEmpty(data)) {
+            data = resolveExternal(m, guid);
+        }
         if (isEmpty(data)) {
             log.warn("{}: '{}' без бинарника", guid, m.fileName());
-            return null;
+            return NO_BYTES;
         }
         if (data.length > maxFileBytes) {
             log.warn("{}: '{}' пропущен (большой)", guid, m.fileName());
-            return null;
+            return NO_BYTES;
         }
         return data;
     }
@@ -134,14 +141,13 @@ public class ContentLoader {
             """, rs -> {
             List<LoadedFile> out = new ArrayList<>();
             while (rs.next()) {
-                mapRow(rs, guid).ifPresent(out::add);      // без continue/break в цикле
+                mapRow(rs, guid).ifPresent(out::add);
             }
             return out;
         }, guid);
     }
 
-    /** Одна строка вьюхи → файл; Optional.empty() = пропустить. Вынесено из load(),
-     *  чтобы не превышать лимит когнитивной сложности. */
+    /** Одна строка вьюхи → файл; Optional.empty() = пропустить. */
     private Optional<LoadedFile> mapRow(ResultSet rs, UUID guid) throws SQLException {
         String name = rs.getString("file_name");
         UUID fileId = UUID.fromString(rs.getString("file_id"));
@@ -150,8 +156,8 @@ public class ContentLoader {
             log.warn("{}: '{}' пропущен ({} байт)", guid, name, declared);
             return Optional.empty();
         }
-        byte[] data = rs.getBytes("content");              // стор Database — байты в основной БД
-        if (isEmpty(data)) {                               // внешний стор
+        byte[] data = rs.getBytes("content");
+        if (isEmpty(data)) {
             data = resolveExternal(rs, guid, name, fileId);
         }
         if (isEmpty(data)) {
@@ -164,17 +170,21 @@ public class ContentLoader {
         }
         return Optional.of(new LoadedFile(fileId, name, extOf(name), data));
     }
-    /** Под FileMeta вместо ResultSet — как старый resolveExternal. */
+
+    /** Под FileMeta вместо ResultSet. */
     private byte[] resolveExternal(FileMeta m, UUID guid) {
         String storage = m.storageName();
         if (storage == null) {
             log.warn("{}: '{}' — стор не определён и байтов в БД нет", guid, m.fileName());
             return NO_BYTES;
         }
-        if (diskRoots.containsKey(storage)) return fromDisk(guid, storage, m.filePath());
+        if (diskRoots.containsKey(storage)) {
+            return fromDisk(guid, storage, m.filePath());
+        }
         if (archives.containsKey(storage)) {
-            String binId = binaryIdOf(m.fileId());
-            return binId == null ? NO_BYTES : fromArchive(guid, storage, binId);
+            return binaryIdOf(m.fileId())
+                    .map(binId -> fromArchive(guid, storage, binId))
+                    .orElse(NO_BYTES);
         }
         log.warn("{}: '{}' — хранилище '{}' не настроено (rag.content.roots)", guid, m.fileName(), storage);
         return NO_BYTES;
@@ -191,11 +201,9 @@ public class ContentLoader {
             return fromDisk(guid, storage, rs.getString("file_path"));
         }
         if (archives.containsKey(storage)) {
-            String binId = binaryIdOf(fileId);             // dvsys_files.BinaryID
-            if (binId != null) {
-                return fromArchive(guid, storage, binId);
-            }
-            return NO_BYTES;
+            return binaryIdOf(fileId)                      // dvsys_files.BinaryID
+                    .map(binId -> fromArchive(guid, storage, binId))
+                    .orElse(NO_BYTES);
         }
         log.warn("{}: '{}' — хранилище '{}' не настроено (rag.content.roots)", guid, name, storage);
         return NO_BYTES;
@@ -219,8 +227,8 @@ public class ContentLoader {
                 byte[] data = Files.readAllBytes(p);
                 log.debug("{}: '{}' — {} байт с {}", guid, storage, data.length, p);
                 return data;
-            } catch (IOException | InvalidPathException e) {      // не пустой блок:
-                log.debug("{}: путь '{}' не подошёл: {}", guid, p, e.getMessage());  // пробуем следующий
+            } catch (IOException | InvalidPathException e) {
+                log.debug("{}: путь '{}' не подошёл: {}", guid, p, e.getMessage());
             }
         }
         log.warn("{}: хранилище '{}': файл не найден — пробовали {}", guid, storage, candidates);
@@ -228,14 +236,14 @@ public class ContentLoader {
     }
 
     /** ID блоба по файлу — lookup по PK dvsys_files, вьюху не трогаем. */
-    private String binaryIdOf(UUID fileId) {
+    private Optional<String> binaryIdOf(UUID fileId) {
         List<String> ids = jdbc.queryForList(
                 "SELECT BinaryID FROM dbo.dvsys_files WHERE FileID = ?", String.class, fileId);
         if (ids.isEmpty()) {
             log.warn("dvsys_files: BinaryID для FileID={} не найден", fileId);
-            return null;
+            return Optional.empty();
         }
-        return ids.get(0);
+        return Optional.of(ids.get(0));
     }
 
     /** Архивный стор: байты в GAZ_Archive_YYYY.dvsys_binaries, ключ — dvsys_binaries.ID. */
@@ -261,7 +269,7 @@ public class ContentLoader {
                 }
             }
         } catch (SQLException e) {
-            synchronized (conns) {                         // битый коннект — пересоздадим
+            synchronized (conns) {
                 Connection dead = conns.remove(storage);
                 if (dead != null) {
                     closeQuietly(dead);

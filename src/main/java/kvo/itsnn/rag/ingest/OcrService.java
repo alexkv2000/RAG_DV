@@ -59,7 +59,8 @@ public class OcrService {
         if (!cfg.enabled()) return;
         PooledTesseract t = acquire();
         try {
-            pool.offer(t);        // первый инстанс живёт с самого старта
+            if (!pool.offer(t)) {       // первый инстанс живёт с самого старта
+                throw new IllegalStateException("OCR: пул переполнен при прогреве"); }
         } catch (Exception e) {
             release(t);
             throw e;
