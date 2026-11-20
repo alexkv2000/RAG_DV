@@ -18,6 +18,13 @@ public record LlmProperties(
         // === D: сценарий «сравнение версий одного документа» ===
         @DefaultValue("true") boolean compareEnabled,
         @DefaultValue("8") int compareChunksPerSide,
+        /* === файлы свободного чата (direct-chat) === */
+        /* Потолок РАЗМЕРА одного прикреплённого файла, МБ. Больше 64 задавать бессмысленно:
+           multipart-потолок UploadConfig (64 МБ) отклонит запрос раньше — HTTP 413
+           вместо понятного сообщения сервиса (DirectChatService предупредит WARN'ом). */
+        @DefaultValue("32") int directMaxFileMb,
+        /* Сколько файлов можно прикрепить к одной сессии свободного чата. */
+        @DefaultValue("3") int directMaxFiles,
         /* Лимит текста одного прикреплённого файла свободного чата, симв. */
         @DefaultValue("120000") int directMaxFileChars,
         /* Оценочный бюджет токенов на ВСЕ прикреплённые файлы сессии свободного чата:

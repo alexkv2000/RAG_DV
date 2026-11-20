@@ -22,22 +22,27 @@ import java.util.concurrent.ConcurrentLinkedDeque;
  * (pdf-скан без текстового слоя автоматически уходит в OCR), обрезается до лимита
  * и подставляется в КАЖДЫЙ вопрос сессии, пока файл не открепят. В историю реплик
  * текст файла не пишется — иначе каждый следующий вопрос дублировал бы все файлы.
- * Два лимита файлов: direct-max-file-chars — обрезка текста одного файла;
- * direct-max-session-tokens — оценочный суммарный бюджет токенов ВСЕХ файлов
- * сессии (файлы уходят в каждый вопрос вместе с историей и резервом max-tokens,
- * а контекст модели конечен — 131 072 токена у Qwen3).
+ * Четыре лимита файлов, все — rag.llm.*: direct-max-file-mb — размер одного файла
+ * (больше 64 задавать нельзя — раньше отклонит multipart-потолок UploadConfig);
+ * direct-max-files — файлов на сессию; direct-max-file-chars — обрезка текста
+ * одного файла; direct-max-session-tokens — оценочный суммарный бюджет токенов
+ * ВСЕХ файлов сессии (файлы уходят в каждый вопрос вместе с историей и резервом
+ * max-tokens, а контекст модели конечен — 131 072 токена у Qwen3).
  */
 @Service
 public class DirectChatService {
 
     private static final Logger log = LoggerFactory.getLogger(DirectChatService.class);
 
+    /** Multipart-потолок UploadConfig (64 МБ): файл больше него Tomcat отклоняет раньше
+     *  сервиса — 413 вместо понятного сообщения. Число дублируется сознательно: прямая
+     *  зависимость на бин загрузки здесь не нужна, константа нужна только для WARN'а. */
+    private static final long UPLOAD_CEILING_BYTES = 64L * 1024 * 1024;
+
     /** Форматы, которые умеет TextExtractor (картинки и pdf-сканы — через OCR). */
     private static final Set<String> ALLOWED_EXT = Set.of(
             "pdf", "doc", "docx", "rtf", "txt", "csv", "html", "htm",
             "xlsx", "xls", "xlsm", "msg", "png", "jpg", "jpeg", "tif", "tiff");
-    private static final long MAX_FILE_BYTES = 32L * 1024 * 1024;
-    private static final int MAX_FILES = 3;
 
     /** Символов текста одного файла, уходящих в LLM; источник — rag.llm.direct-max-file-chars. */
     private final int maxFileChars;
@@ -45,6 +50,12 @@ public class DirectChatService {
     /** Оценочный бюджет токенов на ВСЕ файлы сессии; источник — rag.llm.direct-max-session-tokens.
      *  Это не лог-значение, а сам лимит: с ним putFile() сверяет сумму токенов файлов. */
     private final int maxSessionTokens;
+
+    /** Потолок РАЗМЕРА одного файла, байты; источник — rag.llm.direct-max-file-mb. */
+    private final long maxFileBytes;
+
+    /** Файлов на сессию; источник — rag.llm.direct-max-files. */
+    private final int maxFiles;
 
     private final LlmProperties cfg;
     private final LlmClient llm;
@@ -93,8 +104,8 @@ public class DirectChatService {
         synchronized void putFile(String name, String text, int tokens, int maxFiles, int maxTokens) {
             String k = name.toLowerCase(Locale.ROOT);
             if (!files.containsKey(k) && files.size() >= maxFiles) {
-                throw new IllegalArgumentException("к сессии уже прикреплено " + maxFiles
-                        + " файла — открепите один, чтобы добавить новый");
+                throw new IllegalArgumentException("достигнут лимит файлов сессии (" + maxFiles
+                        + ") — открепите один, чтобы добавить новый");
             }
             int rest = 0;                          // бюджет уже прикреплённых файлов
             for (Map.Entry<String, AttachedFile> e : files.entrySet()) {
@@ -134,11 +145,19 @@ public class DirectChatService {
         this.extractor = extractor;
         this.maxFileChars = Math.max(1, cfg.directMaxFileChars());
         this.maxSessionTokens = Math.max(1, cfg.directMaxSessionTokens());
+        this.maxFileBytes = Math.max(1, cfg.directMaxFileMb()) * 1024L * 1024L;
+        this.maxFiles = Math.max(1, cfg.directMaxFiles());
+        if (maxFileBytes > UPLOAD_CEILING_BYTES) {
+            log.warn("DirectChatService: rag.llm.direct-max-file-mb={} выше multipart-потолка {} МБ "
+                            + "(UploadConfig) — Tomcat будет отклонять такие файлы раньше, с HTTP 413",
+                    cfg.directMaxFileMb(), UPLOAD_CEILING_BYTES / 1024 / 1024);
+        }
         this.sessions = SessionCaches.withTtl(cfg.sessionTtlMinutes());
-        log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. по {} симв., "
-                        + "бюджет сессии {} токенов, TTL сессии {} (rag.llm.direct-max-file-chars "
-                        + "/ direct-max-session-tokens / session-ttl-minutes)",
-                cfg.model(), cfg.historyTurns(), MAX_FILES, maxFileChars, maxSessionTokens,
+        log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. до {} МБ, "
+                        + "текст {} симв./файл, бюджет сессии {} токенов, TTL сессии {} (rag.llm.direct-max-file-mb "
+                        + "/ direct-max-files / direct-max-file-chars / direct-max-session-tokens / session-ttl-minutes)",
+                cfg.model(), cfg.historyTurns(), maxFiles, maxFileBytes / 1024 / 1024,
+                maxFileChars, maxSessionTokens,
                 cfg.sessionTtlMinutes() <= 0 ? "∞" : cfg.sessionTtlMinutes() + " мин");
     }
 
@@ -176,7 +195,7 @@ public class DirectChatService {
         int tokens = estimateTokens(text);
 
         Session s = sessions.get(sid, k -> new Session());
-        s.putFile(name, text, tokens, MAX_FILES, maxSessionTokens);
+        s.putFile(name, text, tokens, maxFiles, maxSessionTokens);
         log.info("DIRECT: файл '{}' прикреплён к сессии ({} симв. ≈ {} ток., сессия {}/{})",
                 name, text.length(), tokens, s.usedTokens(), maxSessionTokens);
         return files(sid);
@@ -244,10 +263,12 @@ public class DirectChatService {
         return sb + "Вопрос пользователя: " + message;
     }
 
-    private static String check(String name, long size) {
+    /** Проверки файла: не пустой, не больше rag.llm.direct-max-file-mb, допустимый формат. */
+    private String check(String name, long size) {
         if (size == 0) throw new IllegalArgumentException("файл '" + name + "' пустой");
-        if (size > MAX_FILE_BYTES) throw new IllegalArgumentException(
-                "файл '" + name + "' больше " + MAX_FILE_BYTES / 1024 / 1024 + " МБ");
+        if (size > maxFileBytes) throw new IllegalArgumentException(
+                "файл '" + name + "' больше " + maxFileBytes / 1024 / 1024
+                        + " МБ (rag.llm.direct-max-file-mb)");
         int d = name.lastIndexOf('.');
         String ext = d < 0 || d == name.length() - 1 ? "" : name.substring(d + 1).toLowerCase(Locale.ROOT);
         if (!ALLOWED_EXT.contains(ext)) throw new IllegalArgumentException(

@@ -14,8 +14,8 @@ spring:
         cachecontrol:
           no-cache: true    # всегда сверять с сервером (ETag/304), не брать из кэша вслепую
   datasource:
-    url: jdbc:sqlserver://docprod\\sqlprod:1433;databaseName=GAZ;encrypt=true;trustServerCertificate=true;packetSize=32767
-    username: DVSQL
+    url: jdbc:sqlserver://${DB_SEREVR}:1433;databaseName=GAZ;encrypt=true;trustServerCertificate=true;packetSize=32767
+    username: ${DB_USER}
     password: ${DB_PASSWORD}
 rag:
   rerank: # стадия-2 поиска: кросс-энкодер переупорядочивает кандидатов Chroma
@@ -27,7 +27,7 @@ rag:
     passages: 16                 # Default - 32. сколько верхних кандидатов или кандидатов реранчить в первую волну
     min-score: 0.05        # < 0.05 — ниже(мусор): не идёт ни в контекст, ни в источники
   ui:
-    doc-card-url: https://sdo.gaz.ru/DocsvisionWebClient/#/CardView/211CAF82-2949-4861-B4D0-238D373F951C?FileId=
+    doc-card-url: https://${SERVER_DB_LINK}/DocsvisionWebClient/#/CardView/211CAF82-2949-4861-B4D0-238D373F951C?FileId=
   #poll-interval: 15s
   #ingest-batch-day: 1
   #ingest-batch-night: 16
@@ -45,7 +45,7 @@ rag:
     dims: 384
     batch: 16 # для ПРОД - 64
   chroma:
-    base-url: http://localhost:8000
+    base-url: http://127.0.0.1:8000
     collection: rag_chunks
   ocr:
     enabled: true        # включить после установки tessdata
@@ -55,6 +55,8 @@ rag:
     data-path: C:/tessdata/
   llm:
     base-url: https://ai.loodsen.ru/api/v1 #https://ai.loodsen.ru/api/v1/chat/completions
+    direct-max-file-mb: 32        # Потолок размера одного файла 'Свободного чата' (макс. 64 — потолок multipart в UploadConfig)
+    direct-max-files: 3           # Файлов на сессию свободного чата
     direct-max-file-chars: 400000 #Это Максимум, остальное режется
     direct-max-session-tokens: 110000  # Оценка токенов на ВСЕ файлы сессии
     api-key: ${LOODSEN_API_KEY}
@@ -70,16 +72,17 @@ rag:
     compare-chunks-per-side: 8   # Фрагментов на каждую версию при сравнении(бюджет 15 000 символов режет лишнее сам)
     session-ttl-minutes: 30   # TTL неактивной сессии чата (RAG + свободный) 30 минут; 0 — бессрочно
   content:
+    max-file-mb: 32   # опционально: снижает потолок RAM, не меняя код
     roots: # имя стора (dvsys_binary_storages.Name)
       # NTFS-стор: имя → корень шары
       OfficeWork: '\\gaz\docsvision\DVStream\OfficeWork'
       # архивные БД: имя → JDBC-URL
-      Archive_2019: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2019;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
-      Archive_2020: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2020;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
-      Archive_2021: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2021;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
-      Archive_2022: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2022;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
-      Archive_2023: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2023;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
-      Archive_2024: 'jdbc:sqlserver://DocArc\sqlArc;databaseName=GAZ_Archive_2024;user=dv_arc;password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2019: 'jdbc:sqlserver://${SERVER_ARC};databaseName=GAZ_Archive_2019;user=${DBArcv_USER};password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2020: 'jdbc:sqlserver://${SERVER_ARC};databaseName=GAZ_Archive_2020;user=${DBArcv_USER};password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2021: 'jdbc:sqlserver://${SERVER_ARC};databaseName=GAZ_Archive_2021;user=${DBArcv_USER};password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2022: 'jdbc:sqlserver://${SERVER_ARC};databaseName=GAZ_Archive_2022;user=${DBArcv_USER};password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2023: 'jdbc:sqlserver://${SERVER_ARC};databaseName=GAZ_Archive_2023;user=${DBArcv_USER};password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
+      Archive_2024: 'jdbc:sqlserver://${SERVER_ARC};databaseName=GAZ_Archive_2024;user=${DBArcv_USER};password=${DBArh_PASSWORD};encrypt=false;trustServerCertificate=true'
 logging:
   level:
     kvo.itsnn.rag: INFO

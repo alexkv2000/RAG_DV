@@ -51,8 +51,11 @@ public class ContentLoader {
     /** Ленивые соединения — по одному на архив. */
     private final Map<String, Connection> conns = new HashMap<>();
 
+    private final long maxFileBytes;
     public ContentLoader(JdbcTemplate jdbc, RagProperties props) {
         this.jdbc = jdbc;
+        this.maxFileBytes = (props.content() == null || props.content().maxFileMb() <= 0
+                ? 64 : props.content().maxFileMb()) * 1024L * 1024L;
         Map<String, String> disk = new LinkedHashMap<>();          // было две переменных в одной строке
         Map<String, String> arc = new LinkedHashMap<>();
         if (props.content() != null && props.content().roots() != null) {   // тело в фигурных скобках
@@ -69,7 +72,57 @@ public class ContentLoader {
         }
         this.diskRoots = Map.copyOf(disk);
         this.archives = Map.copyOf(arc);
-        log.info("Контент: диск {}, архивы {}", diskRoots.keySet(), archives.keySet());
+        log.info("Контент: диск {}, архивы {}, лимит файла {} МБ", diskRoots.keySet(), archives.keySet(), maxFileBytes / 1024 / 1024);
+    }
+    /** Файл карточки без байтов: метаданные + место хранения. Единица потоковой индексации. */
+    public record FileMeta(UUID fileId, String fileName, String ext, String storageName,
+                           String filePath, long declaredSize, boolean contentInDb) {}
+    /** Метаданные файлов карточки; content НЕ читается (DATALENGTH не материализует блоб). */
+    public List<FileMeta> loadMeta(UUID guid) {
+        return jdbc.query("""
+        SELECT file_id, file_name, storage_name, file_path, file_size,
+               CASE WHEN DATALENGTH(content) > 0 THEN 1 ELSE 0 END AS in_db
+        FROM dbo.rag_source_content_view
+        WHERE document_guid = ?
+        ORDER BY file_name
+        """, rs -> {
+            List<FileMeta> out = new ArrayList<>();
+            while (rs.next()) metaOf(rs, guid).ifPresent(out::add);
+            return out;
+        }, guid);
+    }
+    private Optional<FileMeta> metaOf(ResultSet rs, UUID guid) throws SQLException {
+        String name = rs.getString("file_name");
+        long declared = rs.getLong("file_size");
+        if (declared > maxFileBytes) {
+            log.warn("{}: '{}' пропущен ({} байт)", guid, name, declared);
+            return Optional.empty();
+        }
+        return Optional.of(new FileMeta(UUID.fromString(rs.getString("file_id")), name, extOf(name),
+                rs.getString("storage_name"), rs.getString("file_path"), declared, rs.getInt("in_db") == 1));
+    }
+    /** Байты ОДНОГО файла: стор Database — из основной БД, внешний — шара/архив.
+     *  null — бинарника нет / больше лимита (причина в логе), вызывающий пропускает файл. */
+    public byte[] loadBytes(UUID guid, FileMeta m) {
+        byte[] data = m.contentInDb() ? dbContent(guid, m) : NO_BYTES;
+        if (isEmpty(data)) data = resolveExternal(m, guid);
+        if (isEmpty(data)) {
+            log.warn("{}: '{}' без бинарника", guid, m.fileName());
+            return null;
+        }
+        if (data.length > maxFileBytes) {
+            log.warn("{}: '{}' пропущен (большой)", guid, m.fileName());
+            return null;
+        }
+        return data;
+    }
+
+    private byte[] dbContent(UUID guid, FileMeta m) {
+        List<byte[]> rows = jdbc.queryForList("""
+            SELECT content FROM dbo.rag_source_content_view
+            WHERE document_guid = ? AND file_id = ?
+            """, byte[].class, guid, m.fileId());
+        return rows.isEmpty() ? NO_BYTES : rows.get(0);
     }
 
     public List<LoadedFile> load(UUID guid) {
@@ -110,6 +163,21 @@ public class ContentLoader {
             return Optional.empty();
         }
         return Optional.of(new LoadedFile(fileId, name, extOf(name), data));
+    }
+    /** Под FileMeta вместо ResultSet — как старый resolveExternal. */
+    private byte[] resolveExternal(FileMeta m, UUID guid) {
+        String storage = m.storageName();
+        if (storage == null) {
+            log.warn("{}: '{}' — стор не определён и байтов в БД нет", guid, m.fileName());
+            return NO_BYTES;
+        }
+        if (diskRoots.containsKey(storage)) return fromDisk(guid, storage, m.filePath());
+        if (archives.containsKey(storage)) {
+            String binId = binaryIdOf(m.fileId());
+            return binId == null ? NO_BYTES : fromArchive(guid, storage, binId);
+        }
+        log.warn("{}: '{}' — хранилище '{}' не настроено (rag.content.roots)", guid, m.fileName(), storage);
+        return NO_BYTES;
     }
 
     /** Байтов в основной БД нет — ищем на шаре или в архивной БД. */

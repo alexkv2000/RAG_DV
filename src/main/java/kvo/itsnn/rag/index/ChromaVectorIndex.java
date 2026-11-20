@@ -346,7 +346,7 @@ public class ChromaVectorIndex implements VectorIndex {
 
     /** Заливка всех векторов из MSSQL. Вызывается ТОЛЬКО из reload — уже под write-lock. */
     private void upsertFromMssql() {
-        final int FLUSH = 50_000;
+        final int FLUSH = 10_000;
         List<Long> ids = new ArrayList<>(FLUSH);
         List<float[]> vecs = new ArrayList<>(FLUSH);
         List<Map<String, String>> metas = new ArrayList<>(FLUSH);

@@ -6,6 +6,7 @@ import kvo.itsnn.rag.index.VectorIndex;
 import kvo.itsnn.rag.ingest.Embedder;
 import kvo.itsnn.rag.llm.LlmClient;
 import kvo.itsnn.rag.rerank.Reranker;
+import kvo.itsnn.rag.util.DocPatterns;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -165,9 +166,12 @@ public class AskService {
         List<ChunkHit> reranked = rerank(query, ordered);
         List<ChunkHit> out = new ArrayList<>(cfg.contextChunks());
         Map<String, Integer> perDoc = new HashMap<>();          // B: до MAX_CHUNKS_PER_DOC чанков на документ
+        int cap = DocPatterns.docCode(query) != null
+                ? cfg.contextChunks()      // 10 — вопрос про конкретный документ
+                : MAX_CHUNKS_PER_DOC;      // 3  — обычный семантический вопрос
         for (ChunkHit h : reranked) {
             int n = perDoc.merge(h.documentGuid(), 1, Integer::sum);
-            if (n <= MAX_CHUNKS_PER_DOC) out.add(h);
+            if (n <= cap) out.add(h);
             if (out.size() == cfg.contextChunks()) break;
         }
         log.info("retrieve: после дедупа={}", out.size());

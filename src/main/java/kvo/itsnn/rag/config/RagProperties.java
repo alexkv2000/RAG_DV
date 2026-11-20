@@ -65,7 +65,8 @@ public record RagProperties(
 
     /** Корни файловых хранилищ Docsvision: имя из dvsys_binary_storages.Name → корень (UNC/папка).
      *  Для стора 'Database' (хранение в БД) корень не нужен — байты приходят из колонки content. */
-    public record Content(Map<String, String> roots) {}
+    public record Content(Map<String, String> roots,
+                          @DefaultValue("64") int maxFileMb) {}
     /** База ссылки на карточку в Docsvision Thin Client. */
     public record Ui(@DefaultValue("https://sdo.gaz.ru/DocsvisionThinClient/#/TaskView/")
                      String docCardUrl) {}

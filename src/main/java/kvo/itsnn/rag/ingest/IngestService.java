@@ -9,12 +9,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 @Service
 public class IngestService {
@@ -72,45 +73,87 @@ public class IngestService {
      * и когнитивная сложность метода оставалась низкой.
      */
     private void process(DocumentRef ref, long t0) {
-        var files = contentLoader.load(ref.guid());
-        List<Long> oldIds = refs.chunkIdsOf(ref.guid());   // старые чанки ДО замены
-
-        if (files.isEmpty()) {                             // карточка без файлов
+        List<ContentLoader.FileMeta> metas = contentLoader.loadMeta(ref.guid());
+        List<Long> oldIds = refs.chunkIdsOf(ref.guid());
+        if (metas.isEmpty()) { markEmpty(ref, oldIds); return; }
+        Extracted ex = extractParts(ref, metas);            // байты — только одного файла в моменте
+        if (ex.parts().isEmpty()) {
+            requireText(ex.sawContentFile());
             markEmpty(ref, oldIds);
             return;
         }
-
-        List<ChunkPart> parts = collectParts(ref, files);
-        if (parts.isEmpty()) {
-            requireText(files);                            // конверты — не ошибка; сканы — ошибка
-            markEmpty(ref, oldIds);
-            return;
-        }
-
-        String joined = parts.stream().map(ChunkPart::text).collect(Collectors.joining("\u0001"));
-        byte[] hash = Sha256.of(joined);
-
-        if (refs.sameHash(ref.guid(), hash)) {             // контент не менялся — эмбеддинг пропускаем
+        byte[] hash = ex.digest().digest();                 // вместо joined-копии всего текста
+        if (refs.sameHash(ref.guid(), hash)) {              // контент не менялся — эмбеддинг пропускаем
             refs.markIndexed(ref.guid(), hash);
             return;
         }
-
-        String prefix = props.embedding().passagePrefix();
-        List<float[]> vectors = embedder.embedAll(
-                parts.stream().map(p -> prefix + embedInput(p.fileName(), p.text())).toList());
-
+        List<float[]> vectors = vectorsOf(ex.parts());      // батчами, без копий всех строк сразу
         List<Long> ids = tx.execute(st -> {
-            List<Long> newIds = chunks.replaceChunks(ref.guid(), parts);
-            chunks.insertEmbeddings(newIds, vectors, embedder.model());  // резервная копия в MSSQL
+            List<Long> newIds = chunks.replaceChunks(ref.guid(), ex.parts());
+            chunks.insertEmbeddings(newIds, vectors, embedder.model());
             return newIds;
         });
-
-        publishVectors(oldIds, ref.guid(), ref.classifier(), ids, vectors);             // ChromaDB; сбой → EmbeddingServiceException
-        refs.markIndexed(ref.guid(), hash);                // статус 'I' только после успеха
-
+        publishVectors(oldIds, ref.guid(), ref.classifier(), ids, vectors);
+        refs.markIndexed(ref.guid(), hash);
         log.info("Проиндексирован {} [{}] — {} чанков из {} файлов за {} мс",
-                ref.guid(), ref.classifier(), ids.size(), files.size(),
+                ref.guid(), ref.classifier(), ids.size(), metas.size(),
                 System.currentTimeMillis() - t0);
+    }
+
+    /** Результат потокового извлечения: чанки, инкрементальный хэш, признак «был файл с байтами». */
+    private record Extracted(List<ChunkPart> parts, MessageDigest digest, boolean sawContentFile) {}
+    private Extracted extractParts(DocumentRef ref, List<ContentLoader.FileMeta> metas) {
+        List<ChunkPart> parts = new ArrayList<>();
+        MessageDigest digest = Sha256.newDigest();
+        boolean sawContentFile = false;
+        boolean first = true;
+        for (ContentLoader.FileMeta m : metas) {
+            if (isMachineEnvelope(m.fileName())) continue;
+            byte[] bytes = contentLoader.loadBytes(ref.guid(), m);   // null — файла нет, причина в логе
+            if (bytes == null) continue;                             // как раньше: файл не попадал в files
+            sawContentFile = true;
+            for (ChunkPart p : safeExtract(ref, m, bytes)) {
+                // байт-в-байт то же, что Sha256.of(String.join("\u0001", texts)) — хэши совместимы
+                if (!first) digest.update((byte) 1);
+                first = false;
+                digest.update(p.text().getBytes(StandardCharsets.UTF_8));
+                parts.add(p);
+            }
+            // bytes недостижимы дальше — GC заберёт сразу после итерации
+        }
+        return new Extracted(parts, digest, sawContentFile);
+    }
+    /** Извлечение и чанкование ОДНОГО файла; байты живут только в этом кадре стека. */
+    private List<ChunkPart> safeExtract(DocumentRef ref, ContentLoader.FileMeta m, byte[] bytes) {
+        try {
+            List<ChunkPart> parts = new ArrayList<>();
+            var f = new ContentLoader.LoadedFile(m.fileId(), m.fileName(), m.ext(), bytes);
+            for (String piece : chunker.split(extractor.extract(f))) {
+                parts.add(new ChunkPart(piece, m.fileId(), m.fileName()));
+            }
+            return parts;
+        } catch (Exception e) {
+            log.warn("{}: файл '{}' пропущен — {}", ref.guid(), m.fileName(), e.getMessage());
+            return List.of();
+        }
+    }
+    /** Эмбеддинг батчами: строки с префиксом живут только в рамках батча. */
+    private List<float[]> vectorsOf(List<ChunkPart> parts) {
+        String prefix = props.embedding().passagePrefix();
+        int batch = Math.max(1, props.embedding().batch());
+        List<float[]> vectors = new ArrayList<>(parts.size());
+        for (int from = 0; from < parts.size(); from += batch) {
+            List<ChunkPart> slice = parts.subList(from, Math.min(parts.size(), from + batch));
+            List<String> input = slice.stream()
+                    .map(p -> prefix + embedInput(p.fileName(), p.text()))
+                    .toList();
+            vectors.addAll(embedder.embedAll(input));   // 384 float ≈ 1,5 КБ на чанк — копим смело
+        }
+        return vectors;
+    }
+    /** Пустой набор чанков допустим, только если контентных файлов не было вовсе (только конверты). */
+    private static void requireText(boolean sawContentFile) {
+        if (sawContentFile) throw new IllegalStateException("ни один файл не дал текст (сканы без OCR?)");
     }
 
     /**
@@ -124,42 +167,6 @@ public class IngestService {
             log.warn("Chroma: векторы {} не удалены ({}) — вычистит ночная сверка", ref.guid(), e.getMessage());
         }
         refs.markIndexed(ref.guid(), Sha256.of(""));
-    }
-
-    /**
-     * Пустой набор чанков допустим только если все файлы — машинные конверты.
-     */
-    private static void requireText(List<ContentLoader.LoadedFile> files) {
-        if (!files.stream().allMatch(f -> isMachineEnvelope(f.fileName()))) {
-            throw new IllegalStateException("ни один файл не дал текст (сканы без OCR?)");
-        }
-    }
-
-    private List<ChunkPart> collectParts(DocumentRef ref, List<ContentLoader.LoadedFile> files) {
-        List<ChunkPart> parts = new ArrayList<>();
-        for (ContentLoader.LoadedFile f : files) {
-            if (isMachineEnvelope(f.fileName())) {
-                continue;
-            }
-            parts.addAll(safeExtract(ref, f));
-        }
-        return parts;
-    }
-
-    /**
-     * Извлечение и чанкование одного файла; сбой одного файла не валит документ целиком.
-     */
-    private List<ChunkPart> safeExtract(DocumentRef ref, ContentLoader.LoadedFile f) {
-        try {
-            List<ChunkPart> parts = new ArrayList<>();
-            for (String piece : chunker.split(extractor.extract(f))) {
-                parts.add(new ChunkPart(piece, f.fileId(), f.fileName()));
-            }
-            return parts;
-        } catch (Exception e) {
-            log.warn("{}: файл '{}' пропущен — {}", ref.guid(), f.fileName(), e.getMessage());
-            return List.of();
-        }
     }
 
     private static boolean isMachineEnvelope(String fname) {
