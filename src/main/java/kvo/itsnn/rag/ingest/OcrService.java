@@ -1,7 +1,7 @@
 package kvo.itsnn.rag.ingest;
 
+import jakarta.annotation.PreDestroy;
 import kvo.itsnn.rag.config.RagProperties;
-import net.sourceforge.tess4j.ITesseract;
 import net.sourceforge.tess4j.Tesseract;
 import net.sourceforge.tess4j.TesseractException;
 import org.apache.pdfbox.Loader;
@@ -17,18 +17,63 @@ import java.awt.Graphics2D;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
-
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 /** OCR сканов через Tesseract (tess4j). Активируется конфигом rag.ocr.enabled.
  *  Страницы, распознанные «вверх ногами»/боком (латинский шум вместо кириллицы),
- *  автоматически допробиваются с поворотами 90/180/270°. */
+ *  автоматически допробиваются с поворотами 90/180/270°.
+ *
+ *  Пул инстансов: Tesseract не потокобезопасен, но его инициализация (загрузка
+ *  traineddata rus+eng) стоит секунды — создание инстанса на каждую страницу PDF
+ *  было основной тратой времени OCR. Теперь инстансы переиспользуются: один —
+ *  на весь документ (recognizePdf), по числу параллельных вызовов — в пуле
+ *  (планировщик ingest + HTTP-вызовы extract/direct-chat). Пул наполняется
+ *  лениво: при выключенном OCR накладных расходов нет. */
 @Component
 public class OcrService {
 
     private static final Logger log = LoggerFactory.getLogger(OcrService.class);
+
+    /** Инстансов в пуле. 2 покрывают типичную нагрузку: один держит ingest-поток
+     *  планировщика, второй — HTTP-запрос (/api/rag/extract, /api/rag/direct-chat/files).
+     *  Больше не нужно: OCR на CPU и так съедает все ядра. */
+    private static final int POOL_SIZE = 2;
     private final RagProperties.Ocr cfg;
+
+    /** Ожидание права на инстанс, когда пул пуст и лимит исчерпан (HTTP-поток не висит вечно). */
+    private static final long ACQUIRE_WAIT_MS = 60_000;
+    /** Жёсткий потолок ЖИВЫХ инстансов Tesseract: пул + выданные в работу. */
+    private final Semaphore permits = new Semaphore(POOL_SIZE);
+
+    /** Свободные инстансы; capacity = POOL_SIZE, лишние при release закрываются. */
+    private final BlockingQueue<PooledTesseract> pool = new ArrayBlockingQueue<>(POOL_SIZE);
 
     public OcrService(RagProperties props) {
         this.cfg = props.ocr();
+    }
+
+    /** Взять инстанс: сначала пул; пусто и лимит живых исчерпан — ждать до ACQUIRE_WAIT_MS,
+     *  дальше — 503 «повторите позже» (ingest вернёт документ в очередь без штрафа). */
+    private PooledTesseract acquire() {
+        PooledTesseract t = pool.poll();
+        if (t != null) return t;                  // инстанс из пула — пермит уже «принадлежит» ему
+        try {
+            if (!permits.tryAcquire(ACQUIRE_WAIT_MS, TimeUnit.MILLISECONDS)) { //ожидание очереди 60 секунд для Tesseract
+                throw new EmbeddingServiceException("OCR: все инстансы заняты — повторите позже", null);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new EmbeddingServiceException("OCR: прервано ожидание инстанса", e);
+        }
+        return newTesseract();                    // право на новый инстанс получено
+    }
+    /** Вернуть инстанс в пул; пул полон — закрыть и вернуть пермит. */
+    private void release(PooledTesseract t) {
+        if (pool.offer(t)) return;               // живёт в пуле, пермит остаётся «занят» инстансом
+        disposeQuietly(t);                       // защитная ветка: лишний закрываем
+        permits.release();
     }
 
     public String recognizePdf(byte[] pdf) {
@@ -42,19 +87,24 @@ public class OcrService {
             int pages = Math.min(total, cfg.maxPages());
             StringBuilder sb = new StringBuilder();
             int rotated = 0;
-            for (int i = 0; i < pages; i++) {          // страница за страницей: ~15 МБ на стр. при 200 dpi
-                BufferedImage img = renderer.renderImageWithDPI(i, cfg.dpi(), ImageType.RGB);
-                try {
-                    OcrResult r = ocrBestOrientation(newTesseract(), img);
-                    if (r.rotated()) {
-                        rotated++;
+            PooledTesseract t = acquire();              // ОДИН инстанс на весь документ, не на страницу
+            try {
+                for (int i = 0; i < pages; i++) {       // страница за страницей: ~15 МБ на стр. при 200 dpi
+                    BufferedImage img = renderer.renderImageWithDPI(i, cfg.dpi(), ImageType.RGB);
+                    try {
+                        OcrResult r = ocrBestOrientation(t, img);
+                        if (r.rotated()) {
+                            rotated++;
+                        }
+                        if (!r.text().isBlank()) {
+                            sb.append(r.text()).append("\n\n");
+                        }
+                    } finally {
+                        img.flush();
                     }
-                    if (!r.text().isBlank()) {
-                        sb.append(r.text()).append("\n\n");
-                    }
-                } finally {
-                    img.flush();
                 }
+            } finally {
+                release(t);
             }
             if (total > pages) {
                 sb.append("[OCR: обработаны первые ").append(pages)
@@ -83,7 +133,13 @@ public class OcrService {
             if (img == null) {
                 throw new IllegalArgumentException("неизвестный формат изображения");
             }
-            String out = ocrBestOrientation(newTesseract(), img).text();
+            PooledTesseract t = acquire();
+            String out;
+            try {
+                out = ocrBestOrientation(t, img).text();
+            } finally {
+                release(t);
+            }
             if (out.isBlank()) {
                 throw new IllegalArgumentException("OCR не дал текста");
             }
@@ -95,11 +151,41 @@ public class OcrService {
         }
     }
 
+    /** Освобождение нативной памяти инстансов пула при остановке приложения. */
+    @PreDestroy
+    public void close() {
+        pool.forEach(OcrService::disposeQuietly);
+        pool.clear();
+    }
+
+    private static void disposeQuietly(PooledTesseract t) {
+        try {
+            t.dispose();
+        } catch (Exception e) {                     // остановка не должна падать на нативном close
+            log.debug("Tesseract dispose: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Обёртка над Tesseract с публичным dispose(): в библиотеке метод объявлен
+     * protected (внутренний хук очистки, наружу не отдаётся), а пулу нужно
+     * освобождать нативную память сверхлимитных инстансов и при остановке.
+     * Переопределение с расширением видимости protected → public разрешено JLS;
+     * функциональность — та же (super.dispose()). Инстансы этого типа создаёт
+     * только сам OcrService, поэтому кастов и утечек чужих типов нет.
+     */
+    private static final class PooledTesseract extends Tesseract {
+        @Override
+        public void dispose() {
+            super.dispose();
+        }
+    }
+
     private record OcrResult(String text, boolean rotated) {}
 
     /** Один прогон как раньше; при признаках «повёрнутого» текста — повороты 90/180/270,
      *  берём вариант с наибольшим числом кириллических символов (перебор только для кривых страниц). */
-    private OcrResult ocrBestOrientation(ITesseract t, BufferedImage img) throws TesseractException {
+    private OcrResult ocrBestOrientation(Tesseract t, BufferedImage img) throws TesseractException {
         String text = t.doOCR(img).strip();
         if (!needsRotate(text)) {
             return new OcrResult(text, false);
@@ -179,10 +265,10 @@ public class OcrService {
         return out;
     }
 
-    /** Tesseract не потокобезопасен — экземпляр на вызов.
+    /** Новый инстанс Tesseract с настройками из rag.ocr.*.
      *  OEM=1 (только LSTM): работает с tessdata_fast/best, где нет legacy-модели. */
-    private ITesseract newTesseract() {
-        ITesseract t = new Tesseract();
+    private PooledTesseract newTesseract() {
+        PooledTesseract t = new PooledTesseract();
         if (cfg.dataPath() != null && !cfg.dataPath().isBlank()) {
             t.setDatapath(cfg.dataPath());
         }

@@ -80,7 +80,8 @@ public class LocalEmbedder implements Embedder, AutoCloseable {
         try (Predictor<String, float[]> p = model.newPredictor()) {
             List<float[]> raw = p.batchPredict(texts);
             List<float[]> out = new ArrayList<>(raw.size());
-            for (float[] v : raw) out.add(VecMath.normalize(v));   // как и в HTTP-версии
+            // вектор только что создан моделью и никому не принадлежит — мутация безопасна, клонировать незачем
+            for (float[] v : raw) out.add(VecMath.normalizeInPlace(v));   // как и в HTTP-версии
             return out;
         } catch (Exception e) {
             throw new EmbeddingServiceException("LocalEmbedder: " + e.getMessage(), e);

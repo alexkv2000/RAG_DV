@@ -8,7 +8,14 @@ public final class VecMath {
     private VecMath() {
     }
 
+    /** Нормализованная КОПИЯ вектора; исходный массив не изменяется. */
     public static float[] normalize(float[] v) {
+        return normalizeInPlace(v.clone());
+    }
+
+    /** Изменяет v на месте и возвращает его же — для горячих путей без лишних аллокаций
+     *  (векторы только что вышли из модели и никому больше не принадлежат). */
+    public static float[] normalizeInPlace(float[] v) {
         double n = 0;
         for (float x : v) {
             n += (double) x * x;

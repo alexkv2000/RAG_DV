@@ -2,6 +2,7 @@ package kvo.itsnn.rag.ask;
 
 import kvo.itsnn.rag.config.RagProperties;
 import kvo.itsnn.rag.llm.LlmClient;
+import kvo.itsnn.rag.util.DocPatterns;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -10,7 +11,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -18,7 +18,8 @@ import java.util.regex.Pattern;
  * Векторный поиск по такому вопросу тащит семантически близкие бланки и реквизиты, а вводная
  * часть документа в топ не попадает — и LLM отказывается. Поэтому файл ищем по коду и версии
  * в ИМЕНИ (как CompareService, без Chroma) и берём первые фрагменты файла — титул, назначение,
- * область применения. Промпт — в rag_control (ключ summary_system_prompt).
+ * область применения. Код и версии распознаёт DocPatterns (общий с CompareService);
+ * здесь — только слова-маркеры суммаризации. Промпт — в rag_control (summary_system_prompt).
  */
 @Service
 public class DocSummaryService {
@@ -31,19 +32,8 @@ public class DocSummaryService {
     private static final int MAX_CONTEXT_CHARS = 15_000;
     private static final int HEAD_CHUNKS = 10;           // сколько первых фрагментов берём
 
-    private static final int FLAGS = Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
-            | Pattern.UNICODE_CHARACTER_CLASS | Pattern.CANON_EQ;
-
-    /** Код документа вида 19-ПЛ07.01 / 12-ИТ3.2 — как в CompareService. */
-    private static final Pattern DOC_CODE = Pattern.compile(
-            "\\d{1,3}\\s*[-–]\\s*[А-ЯA-Z]{1,6}\\s*\\d{1,3}\\.\\d{1,2}", FLAGS);
-
-    /** Версия в вопросе: «версия 6.0», «в.6.0», «редакция 3». */
-    private static final Pattern VERSION = Pattern.compile(
-            "(?:верси\\w*|редакци\\w*|\\b[вv]\\.)\\s*№?\\s*(\\d+(?:[.,]\\d+){0,3})", FLAGS);
-
     /** Намерение «расскажи о документе»: «краткое содержание», «суть», «о чём», «описание»… */
-    private static final Pattern SUMMARY_WORDS = Pattern.compile(
+    private static final Pattern SUMMARY_WORDS = DocPatterns.compile(
             "кратк(ое|о)?\\s+содержан"
                     + "|содержан(ие|ии)\\s+(документа|стандарт|сто|приказ)"
                     + "|суть\\s+(документа|стандарт|сто)"
@@ -51,7 +41,7 @@ public class DocSummaryService {
                     + "|аннотац|описан(ие|ии)\\s+(документа|стандарт)"
                     + "|расскажи\\s+о\\s+(документе|стандарте)"
                     + "|что\\s+(такое|за)\\s+(документ|стандарт|сто)"
-                    + "|основн(ые|ых)\\s+(положени|требован|раздел)", FLAGS);
+                    + "|основн(ые|ых)\\s+(положени|требован|раздел)");
 
     /** Резервный промпт; рабочий — в rag_control (summary_system_prompt). */
     private static final String DEFAULT_PROMPT = """
@@ -87,16 +77,44 @@ public class DocSummaryService {
     /** Фрагмент начала документа. */
     private record HeadChunk(int chunkNo, String content) {}
 
+    /**
+     * Наполнитель контекста: текст + источники + бюджет (MAX_CONTEXT_CHARS символов,
+     * HEAD_CHUNKS фрагментов). Решение «влезает/нет» живёт здесь, чтобы циклы сборки
+     * остались плоскими: один цикл — один break, когнитивная сложность по зубам Sonar.
+     */
+    private static final class Ctx {
+        final StringBuilder text = new StringBuilder();
+        final List<AskService.Source> sources = new ArrayList<>();
+        private int chars;
+
+        /** Бюджет исчерпан — следующие файлы даже не запрашиваем из БД. */
+        boolean done() {
+            return chars >= MAX_CONTEXT_CHARS || sources.size() >= HEAD_CHUNKS;
+        }
+
+        /** Добавить блок, если он влезает в бюджет; false — стоп для текущего файла. */
+        boolean addIfFits(String block, AskService.Source s) {
+            if (done() || chars + block.length() > MAX_CONTEXT_CHARS) {
+                return false;
+            }
+            text.append(block);
+            chars += block.length();
+            sources.add(s);
+            return true;
+        }
+    }
+
     /** Пустой Optional — вопрос не про содержание документа: обычный RAG-путь. */
     public Optional<AskService.AskResult> trySummary(String query, String classifier) {
-        String code = docCode(query);
+        String code = DocPatterns.docCode(query);
         if (code == null || !SUMMARY_WORDS.matcher(query).find()) return Optional.empty();
-        if (versions(query).size() >= 2) return Optional.empty();   // две версии — это CompareService
+        List<String> vs = DocPatterns.versions(query);
+        if (vs.size() >= 2) return Optional.empty();   // две версии — это CompareService
 
         List<FileHit> files = findFiles(code, classifier);
         if (files.isEmpty()) return Optional.empty();
 
-        String want = firstOrNull(versions(query));
+        String want = vs.isEmpty() ? null : vs.getFirst();
         List<FileHit> matched = want == null ? List.of(newest(files)) : withVersion(files, want);
         if (matched.isEmpty()) {
             return Optional.of(noSuchVersion(code, want, files));
@@ -106,36 +124,45 @@ public class DocSummaryService {
 
     private AskService.AskResult summarize(String query, String code, String want,
                                            List<FileHit> matched, List<String> others) {
-        StringBuilder ctx = new StringBuilder();
-        List<AskService.Source> sources = new ArrayList<>();
-        int total = 0;
-        for (FileHit f : matched) {                      // обычно один файл
-            if (total >= MAX_CONTEXT_CHARS) break;
-            for (HeadChunk c : headChunks(f)) {
-                String text = c.content().length() > MAX_CHUNK_CHARS
-                        ? c.content().substring(0, MAX_CHUNK_CHARS) : c.content();
-                String block = "[" + (sources.size() + 1) + "] (" + f.fileName()
-                        + ", фрагмент " + c.chunkNo() + ")\n" + text + "\n\n";
-                if (total + block.length() > MAX_CONTEXT_CHARS) break;
-                ctx.append(block);
-                total += block.length();
-                sources.add(new AskService.Source(f.documentGuid(), f.fileName(), c.chunkNo(),
-                        1.0, props.docCardUrl(f.fileId())));
-                if (sources.size() >= HEAD_CHUNKS) break;
-            }
-        }
+        Ctx ctx = buildContext(matched);
         String note = others.isEmpty() ? "" : "\nДругие версии документа в базе: "
                 + String.join(", ", others) + ".";
         String user = "Документ: " + code + (want == null ? "" : ", версия " + want)
-                + ".\n\nФрагменты начала файла:\n" + ctx + note + "\nВопрос: " + query.strip();
+                + ".\n\nФрагменты начала файла:\n" + ctx.text + note + "\nВопрос: " + query.strip();
 
         long t0 = System.currentTimeMillis();
         String answer = llm.chat(List.of(LlmClient.Message.system(prompt()),
                 LlmClient.Message.user(user)));
         log.info("SUMMARY: {}{} — {} фрагментов, LLM {} мс", code,
-                want == null ? "" : " в." + want, sources.size(),
+                want == null ? "" : " в." + want, ctx.sources.size(),
                 System.currentTimeMillis() - t0);
-        return new AskService.AskResult(answer, sources);
+        return new AskService.AskResult(answer, ctx.sources);
+    }
+
+    /** Контекст: первые фрагменты каждого найденного файла, пока влезает общий бюджет. */
+    private Ctx buildContext(List<FileHit> matched) {
+        Ctx ctx = new Ctx();
+        for (FileHit f : matched) {                    // обычно один файл
+            if (ctx.done()) break;                     // единственный break: не дёргаем БД зря
+            appendFile(ctx, f);
+        }
+        return ctx;
+    }
+
+    /** Фрагменты одного файла — до первого не влезающего блока. */
+    private void appendFile(Ctx ctx, FileHit f) {
+        for (HeadChunk c : headChunks(f)) {
+            String block = "[" + (ctx.sources.size() + 1) + "] (" + f.fileName()
+                    + ", фрагмент " + c.chunkNo() + ")\n" + clip(c.content()) + "\n\n";
+            AskService.Source src = new AskService.Source(f.documentGuid(), f.fileName(),
+                    c.chunkNo(), 1.0, props.docCardUrl(f.fileId()));
+            if (!ctx.addIfFits(block, src)) break;     // единственный break метода
+        }
+    }
+
+    /** Фрагмент — не длиннее MAX_CHUNK_CHARS (как в AskService). */
+    private static String clip(String content) {
+        return content.length() > MAX_CHUNK_CHARS ? content.substring(0, MAX_CHUNK_CHARS) : content;
     }
 
     /** Названной версии нет — честно говорим, какие есть, со ссылками. */
@@ -183,7 +210,7 @@ public class DocSummaryService {
         jdbc.query(sql, rs -> {
             String name = rs.getString(1);
             if (!seen.add(name.toLowerCase(Locale.ROOT))) return;
-            all.add(new FileHit(name, rs.getString(2), rs.getString(3), versionOf(name)));
+            all.add(new FileHit(name, rs.getString(2), rs.getString(3), DocPatterns.versionOf(name)));
         }, args.toArray());
         return all;
     }
@@ -221,35 +248,15 @@ public class DocSummaryService {
         return DEFAULT_PROMPT;
     }
 
-    private static String docCode(String query) {
-        Matcher m = DOC_CODE.matcher(query);
-        return m.find() ? m.group().replace("–", "-").replaceAll("\\s+", "") : null;
-    }
-
-    private static List<String> versions(String query) {
-        List<String> out = new ArrayList<>();
-        Matcher m = VERSION.matcher(query);
-        while (m.find()) {
-            String v = m.group(1).replace(',', '.');
-            if (!out.contains(v)) out.add(v);
-        }
-        return out;
-    }
-
-    private static String versionOf(String fileName) {
-        Matcher m = VERSION.matcher(fileName);
-        return m.find() ? m.group(1).replace(',', '.') : null;
-    }
-
-    /** «6.0» не должна матчить «16.0»/«6.01» — границы по не-цифре. */
+    /** «6.0» не должна матчить «16.0»/«6.01» — границы по не-цифре (DocPatterns.exactVersion). */
     private static List<FileHit> withVersion(List<FileHit> files, String version) {
-        Pattern p = Pattern.compile("(?<!\\d)" + Pattern.quote(version) + "(?!\\d)");
+        Pattern p = DocPatterns.exactVersion(version);
         return files.stream()
                 .filter(f -> f.version() != null && p.matcher(f.fileName()).find()).toList();
     }
 
     private static FileHit newest(List<FileHit> files) {
-        return files.stream().max(Comparator.comparingDouble(f -> versionKey(f.version()))).orElseThrow();
+        return files.stream().max(Comparator.comparingDouble(f -> DocPatterns.versionKey(f.version()))).orElseThrow();
     }
 
     private static List<String> otherVersions(List<FileHit> files, List<FileHit> matched) {
@@ -258,18 +265,5 @@ public class DocSummaryService {
         return files.stream().map(FileHit::version)
                 .filter(v -> v != null && !used.contains(v))
                 .distinct().sorted().toList();
-    }
-
-    /** 6.0 → 6000, 4.0 → 4000 (первые два компонента); null → -1. */
-    private static double versionKey(String v) {
-        if (v == null) return -1;
-        String[] p = v.split("\\.");
-        double d = p.length > 0 ? Integer.parseInt(p[0]) * 1000.0 : 0;
-        if (p.length > 1) d += Integer.parseInt(p[1]);
-        return d;
-    }
-
-    private static String firstOrNull(List<String> list) {
-        return list.isEmpty() ? null : list.getFirst();
     }
 }

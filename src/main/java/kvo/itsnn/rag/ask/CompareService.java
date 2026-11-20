@@ -4,6 +4,7 @@ import kvo.itsnn.rag.config.LlmProperties;
 import kvo.itsnn.rag.config.RagProperties;
 import kvo.itsnn.rag.ingest.Embedder;
 import kvo.itsnn.rag.llm.LlmClient;
+import kvo.itsnn.rag.util.DocPatterns;
 import kvo.itsnn.rag.util.VecMath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,12 +16,17 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Сценарий «сравнение версий одного документа»: «чем СТО 19-ПЛ07.01 в.6 отличается от в.4».
+ * Сценарий «сравнение версий одного документа»: «чем СТО 19-ПЛ07.01 в.6 отличается от в.4»,
+ * «чем 19-ПЛ07.01 6.0 отличается от 4.0».
  * Почему без Chroma: в её метаданных только document_guid и classifier, а фильтровать нужно
  * по ИМЕНИ файла (код + версия живут в file_name). Векторы продублированы в dbo.rag_embedding —
  * чанки обеих версий берём из rag_chunk, скорим в Java (dot по нормализованным векторам = косинус).
- * Условия срабатывания: в вопросе есть код документа (вида 19-ПЛ07.01) и ДВЕ разные версии
- * («версия 6.0», «в.4.0», «версии 4.0 и 6.0»). Не сработал детектор / нет кода — обычный RAG-путь.
+ * Условия срабатывания: в вопросе есть код документа (вида 19-ПЛ07.01) и ДВЕ разные версии —
+ * обе с маркером («версия 6.0», «в.4.0») или, при словах сравнения, любые два отдельных дробных
+ * числа («чем 6.0 отличается от 4.0», «сравни 6.0 и 4.0»). Даты («12.05.2024») версиями
+ * не считаются. Не сработал детектор / нет кода — обычный RAG-путь.
+ * Код и маркерные версии распознаёт DocPatterns (общий с DocSummaryService); здесь — только
+ * сценарий-специфичное: слова сравнения (COMPARE_WORDS) и версии без маркера (FRACTION).
  * Промпт сравнения — в rag_control (ключ compare_system_prompt), см. ComparePromptProvider.
  */
 @Service
@@ -31,28 +37,16 @@ public class CompareService {
     private static final int MAX_CHUNK_CHARS = 1200;     // как в AskService
     private static final int MAX_CONTEXT_CHARS = 15_000;
 
-    /* CANON_EQ: «№» и кириллица чувствительны к нормализации Юникода; флаг приравнивает
-       разложенные формы («й» = и+U+0306 из копипасты PDF) к обычным при сопоставлении. */
-    private static final int FLAGS = Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
-            | Pattern.UNICODE_CHARACTER_CLASS | Pattern.CANON_EQ;
+    /** Резервный источник версий, когда маркеров меньше двух («чем 6.0 отличается от 4.0»):
+     *  отдельное дробное число. Границы — не цифра и не точка/запятая с ОБЕИХ сторон:
+     *  lookahead отрезает начало даты («12.05» из «12.05.2024»), lookbehind — хвост
+     *  («05.2024»). Целые не берём — «от 3 дней» молчит. */
+    private static final Pattern FRACTION = DocPatterns.compile(
+            "(?<![\\d.])(\\d+[.,]\\d+)(?![.,]\\d)");
 
-    /** «версия 6.0», «версии 6,0», «в.6.0», «v.6.0», «редакция 3». Повтор дробной части
-     *  ограничен {0,3} (до 4 компонентов номера) — ограниченный квантификатор компилируется
-     *  без рекурсии, переполнение стека невозможно. */
-    private static final Pattern VERSION = Pattern.compile(
-            "(?:верси\\w*|редакци\\w*|\\b[вv]\\.)\\s*№?\\s*(\\d+(?:[.,]\\d+){0,3})", FLAGS);
-
-    /** «отличия версии 6.0 от 4.0» — второе число без слова «версия»; только с дробной частью
-     *  («от 3 дней» не матчится) и только если в вопросе есть слова сравнения. */
-    private static final Pattern BARE_VERSION = Pattern.compile(
-            "\\b(?:от|против|и)\\s*(\\d+[.,]\\d+)", FLAGS);
-
-    private static final Pattern COMPARE_WORDS = Pattern.compile(
-            "отлич|разниц|сравн|изменени|что измен|нов(ая|ой|ую)\\s+верси", FLAGS);
-
-    /** Код документа вида 19-ПЛ07.01 / 12-ИТ3.2 (кириллица или латиница, любой дефис). */
-    private static final Pattern DOC_CODE = Pattern.compile(
-            "\\d{1,3}\\s*[-–]\\s*[А-ЯA-Z]{1,6}\\s*\\d{1,3}\\.\\d{1,2}", FLAGS);
+    /** Слова-маркеры намерения «сравнение» (расширено: «новее», «актуальнее»). */
+    private static final Pattern COMPARE_WORDS = DocPatterns.compile(
+            "отлич|разниц|сравн|изменени|что измен|нов(ая|ой|ую)\\s+верси|новее|актуальн");
 
     private final LlmProperties cfg;
     private final RagProperties props;
@@ -102,10 +96,10 @@ public class CompareService {
 
     /** Детектор: код документа + две версии; null — вопрос не сравнительный. */
     private Detected detect(String query) {
-        String code = docCode(query);
+        String code = DocPatterns.docCode(query);
         List<String> vs = versions(query);
         if (code == null || vs.size() < 2) return null;
-        if (vs.size() > 2) vs = vs.subList(0, 2);
+        if (vs.size() > 2) vs = vs.subList(0, 2);  // Никогда не вернёт больше двух. Оставил как защиту от будущих правок. В versions() из-за условия (out.size() < 2 && f.find())
         log.debug("compare: детектор сработал: код='{}', версии={}", code, vs);
         return new Detected(query, code, vs);
     }
@@ -146,7 +140,7 @@ public class CompareService {
     /** Основная ветка: обе версии есть — собрать контекст и спросить LLM. */
     private AskService.AskResult compareTwo(Detected d, Map<String, List<ChunkRow>> byVer) {
         List<String> order = new ArrayList<>(byVer.keySet());         // какая версия новее
-        order.sort(Comparator.comparingDouble(CompareService::versionKey).reversed());
+        order.sort(Comparator.comparingDouble(DocPatterns::versionKey).reversed());
         String newer = order.get(0);
         String older = order.get(1);
         Context ctx = buildContext(newer, older, byVer);
@@ -201,11 +195,11 @@ public class CompareService {
 
     /**
      * Лучшие чанки одной версии: файлы, в чьём имени есть и код, и версия
-     * («6.0» не матчит «16.0»/«6.01» — граница по не-цифре). Копии одного файла
+     * («6.0» не матчит «16.0»/«6.01» — DocPatterns.exactVersion). Копии одного файла
      * (одно имя под разными file_id) не дублируем.
      */
     private List<ChunkRow> topChunks(String code, String version, String classifier, float[] q) {
-        Pattern ver = Pattern.compile("(?<!\\d)" + Pattern.quote(version) + "(?!\\d)");
+        Pattern ver = DocPatterns.exactVersion(version);
         boolean byClassifier = classifier != null && !classifier.isBlank();
         String sql = """
                 SELECT c.document_guid, c.file_name, c.chunk_no, LEFT(c.content, ?) AS content,
@@ -244,29 +238,21 @@ public class CompareService {
                 .toList();
     }
 
-    private static String docCode(String query) {
-        Matcher m = DOC_CODE.matcher(query);
-        return m.find() ? m.group().replace("–", "-").replaceAll("\\s+", "") : null;
-    }
-
-    /** Номера версий из вопроса: оба с маркером («версия 6.0 … версия 4.0») или,
-     *  если маркер один и есть слова сравнения, вторым — «от 4.0» / «и 4.0» с дробной частью. */
-    private static List<String> versions(String query) {
-        Set<String> out = new LinkedHashSet<>();
-        Matcher m = VERSION.matcher(query);
-        while (m.find()) out.add(m.group(1).replace(',', '.'));
-        if (out.size() == 1 && COMPARE_WORDS.matcher(query).find()) {
-            Matcher bare = BARE_VERSION.matcher(query);
-            while (bare.find()) out.add(bare.group(1).replace(',', '.'));
+    /**
+     * Номера версий из вопроса: сначала маркерные («версия 6.0 … версия 4.0», «в.6 … в.4» —
+     * DocPatterns.versions). Набралось меньше двух, а вопрос сравнительный — добираем
+     * отдельные дробные числа: «чем 6.0 отличается от 4.0», «сравни 6.0 и 4.0», «4.0 против 6.0».
+     * Код документа вырезается (внутри DocPatterns и здесь, для FRACTION): в «19-ПЛ07.01»
+     * есть «07.01», и это не версия.
+     */
+    // package-private: чистая функция детектора — юнит-тестируется без Spring и БД
+    static List<String> versions(String query) {
+        Set<String> out = new LinkedHashSet<>(DocPatterns.versions(query));
+        if (out.size() < 2 && COMPARE_WORDS.matcher(query).find()) {
+            String cleaned = DocPatterns.DOC_CODE.matcher(query).replaceAll(" ");
+            Matcher f = FRACTION.matcher(cleaned);
+            while (out.size() < 2 && f.find()) out.add(f.group(1).replace(',', '.'));
         }
         return new ArrayList<>(out);
-    }
-
-    /** Ключ сортировки «новее»: 6.0 → 6000, 4.0 → 4000 (первые два компонента номера). */
-    private static double versionKey(String v) {
-        String[] p = v.split("\\.");
-        double d = p.length > 0 ? Integer.parseInt(p[0]) * 1000.0 : 0;
-        if (p.length > 1) d += Integer.parseInt(p[1]);
-        return d;
     }
 }

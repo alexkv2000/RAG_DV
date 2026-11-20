@@ -10,7 +10,6 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 public class OpenAiCompatibleEmbedder implements Embedder {
@@ -64,9 +63,27 @@ public class OpenAiCompatibleEmbedder implements Embedder {
                 throw new EmbeddingServiceException("Некорректный ответ от " + url
                         + " — ожидается {\"data\":[{\"embedding\":[...]}]}", null);
             }
-            resp.data().forEach(d -> out.add(VecMath.normalize(d.embedding())));
+            resp.data().forEach(d -> out.add(toVector(d.embedding())));
         }
         return out;
+    }
+
+    /** List<Float> из JSON → float[] + нормализация на месте: массив создаём здесь сами,
+     *  кроме нас его никто не держит — копия не нужна. Битый ответ (нет поля / null-элемент) —
+     *  EmbeddingServiceException, как и остальные сбои разбора, а не сырой NPE. */
+    private static float[] toVector(List<Float> raw) {
+        if (raw == null) {
+            throw new EmbeddingServiceException("ответ не содержит поле embedding", null);
+        }
+        float[] v = new float[raw.size()];
+        for (int i = 0; i < v.length; i++) {
+            Float x = raw.get(i);
+            if (x == null) {
+                throw new EmbeddingServiceException("эмбеддинг содержит null-элемент (i=" + i + ")", null);
+            }
+            v[i] = x;
+        }
+        return VecMath.normalizeInPlace(v);
     }
 
     private String describe(int status, String body) {
@@ -102,25 +119,9 @@ public class OpenAiCompatibleEmbedder implements Embedder {
     record RequestDto(String model, List<String> input) {}
     record ResponseDto(List<Item> data) {}
 
-    /** equals/hashCode переопределены: для float[] сгенерированные record'ом
-     *  методы сравнивали бы ссылки, а не содержимое массива. */
-    record Item(float[] embedding) {
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            Item that = (Item) o;
-            return Arrays.equals(embedding, that.embedding);
-        }
-
-        @Override
-        public int hashCode() {
-            return Arrays.hashCode(embedding);
-        }
-    }
+    /** Список вместо float[]: equals у List — поэлементный, правило Sonar «Equals method
+     *  should be overridden in records containing array fields» не задевается — ручные
+     *  equals/hashCode больше не нужны. Плата — боксинг Float при разборе (батч 16×384
+     *  значений — шум на фоне сетевого вызова и инференса). */
+    record Item(List<Float> embedding) {}
 }

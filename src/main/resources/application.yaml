@@ -24,8 +24,8 @@ rag:
     path: C:\models\bge-reranker-v2-m3   # model.onnx (или onnx\model.onnx) + tokenizer.json
     max-tokens: 512
     batch: 8                     # пар «вопрос, фрагмент» за один прогон ONNX (память/скорость)
-    passages: 16                 # Default - 32. сколько верхних кандидатов реранчить
-    min-score: 0.05        # < 0.05 — мусор: не идёт ни в контекст, ни в источники
+    passages: 16                 # Default - 32. сколько верхних кандидатов или кандидатов реранчить в первую волну
+    min-score: 0.05        # < 0.05 — ниже(мусор): не идёт ни в контекст, ни в источники
   ui:
     doc-card-url: https://sdo.gaz.ru/DocsvisionWebClient/#/CardView/211CAF82-2949-4861-B4D0-238D373F951C?FileId=
   #poll-interval: 15s
@@ -67,7 +67,7 @@ rag:
     candidate-chunks: 40 #было 24
     disable-thinking: true
     compare-enabled: true        # false — полностью выключить сценарий сравнения
-    compare-chunks-per-side: 8   # Фрагментов на каждую версию (бюджет 15 000 символов режет лишнее сам)
+    compare-chunks-per-side: 8   # Фрагментов на каждую версию при сравнении(бюджет 15 000 символов режет лишнее сам)
   content:
     roots: # имя стора (dvsys_binary_storages.Name)
       # NTFS-стор: имя → корень шары
