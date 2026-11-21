@@ -14,7 +14,7 @@ spring:
         cachecontrol:
           no-cache: true    # всегда сверять с сервером (ETag/304), не брать из кэша вслепую
   datasource:
-    url: jdbc:sqlserver://${DB_SEREVR}:1433;databaseName=GAZ;encrypt=true;trustServerCertificate=true;packetSize=32767
+    url: jdbc:sqlserver://${DB_SERVER}:1433;databaseName=GAZ;encrypt=true;trustServerCertificate=true;packetSize=32767
     username: ${DB_USER}
     password: ${DB_PASSWORD}
 rag:
@@ -28,12 +28,6 @@ rag:
     min-score: 0.05        # < 0.05 — ниже(мусор): не идёт ни в контекст, ни в источники
   ui:
     doc-card-url: https://${SERVER_DB_LINK}/DocsvisionWebClient/#/CardView/211CAF82-2949-4861-B4D0-238D373F951C?FileId=
-  #poll-interval: 15s
-  #ingest-batch-day: 1
-  #ingest-batch-night: 16
-  #night-start: "23:00"
-  #night-end: "05:00"
-  #day-hour-limit: 60
   chunk:
     target-chars: 650      # Было 400 (мах 700 дальше будет резать вектор) (лимит 512 токенов модели)
     overlap-chars: 80
@@ -57,8 +51,9 @@ rag:
     base-url: https://ai.loodsen.ru/api/v1 #https://ai.loodsen.ru/api/v1/chat/completions
     direct-max-file-mb: 32        # Потолок размера одного файла 'Свободного чата' (макс. 64 — потолок multipart в UploadConfig)
     direct-max-files: 3           # Файлов на сессию свободного чата
-    direct-max-file-chars: 400000 #Это Максимум, остальное режется
-    direct-max-session-tokens: 110000  # Оценка токенов на ВСЕ файлы сессии
+    direct-max-file-chars: 350000 # все что выше 400 000 режется (direct-max-session-tokens × 2 симв. за ток.) / 3 файла
+    direct-max-session-tokens: 120000  # Оценка токенов на ВСЕ файлы сессии
+    direct-clear-files-after-reply: false # true → файл «одноразовый»: после ответа LLM открепляется, текст удаляется из памяти
     api-key: ${LOODSEN_API_KEY}
     model: Qwen3.8-27B
     temperature: 0.2

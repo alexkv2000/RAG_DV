@@ -492,6 +492,12 @@
             if (el.dataset.attach === k) el.remove();
         });
     }
+    /** Убрать из ленты ВСЕ строки прикрепления — бэкенд открепил файлы сам
+     *  (rag.llm.direct-clear-files-after-reply=true: после ответа сессия без файлов). */
+    function dropAllAttachNotes() {
+        box.querySelectorAll('.m[data-attach]').forEach(el => el.remove());
+    }
+
     modeRag.onclick = () => { chatMode = 'rag'; applyChatMode(); };
     modeDirect.onclick = () => { chatMode = 'direct'; applyChatMode(); };
     applyChatMode();
@@ -740,6 +746,12 @@
         a.innerHTML = md(answerText);
         a.dataset.raw = answerText;            //точный текст ответа для удаления из истории
         if (!direct && Array.isArray(j.sources) && j.sources.length) appendSources(a, j.sources);
+        if (direct && Array.isArray(j.files)) {
+            renderDirectFiles(j.files);        // чипы: пустой список скрывает панель #dfiles сам
+            // авточистка (rag.llm.direct-clear-files-after-reply=true): сессия после ответа
+            // без файлов — убираем из ленты и строки «📎 Файл прикреплён: …»
+            if (!j.files.length) dropAllAttachNotes();
+        }
     }
 
     function appendSources(a, srcs) {

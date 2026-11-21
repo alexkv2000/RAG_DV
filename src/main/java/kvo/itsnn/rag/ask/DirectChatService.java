@@ -62,7 +62,7 @@ public class DirectChatService {
     private final DirectChatPromptProvider prompts;
     private final TextExtractor extractor;
     private final Cache<String, Session> sessions;
-
+    private final boolean clearFilesAfterReply;
     /**
      * Сессия: история реплик + прикреплённые файлы.
      * Доступ к files — только через synchronized-методы (монитор — сама сессия):
@@ -119,7 +119,13 @@ public class DirectChatService {
             }
             files.put(k, new AttachedFile(name, text, tokens));
         }
-
+        /** Открепить ВСЕ файлы (автоочистка после ответа). Тексты теряют последнюю
+         *  ссылку — память освобождает GC. Возвращает число удалённых. */
+        synchronized int clearFiles() {
+            int n = files.size();
+            files.clear();
+            return n;
+        }
         /** Открепить файл по имени; несуществующее имя — молча no-op. */
         synchronized void removeFile(String name) {
             files.remove(name.toLowerCase(Locale.ROOT));
@@ -147,6 +153,7 @@ public class DirectChatService {
         this.maxSessionTokens = Math.max(1, cfg.directMaxSessionTokens());
         this.maxFileBytes = Math.max(1, cfg.directMaxFileMb()) * 1024L * 1024L;
         this.maxFiles = Math.max(1, cfg.directMaxFiles());
+        this.clearFilesAfterReply = cfg.directClearFilesAfterReply();
         if (maxFileBytes > UPLOAD_CEILING_BYTES) {
             log.warn("DirectChatService: rag.llm.direct-max-file-mb={} выше multipart-потолка {} МБ "
                             + "(UploadConfig) — Tomcat будет отклонять такие файлы раньше, с HTTP 413",
@@ -155,14 +162,15 @@ public class DirectChatService {
         this.sessions = SessionCaches.withTtl(cfg.sessionTtlMinutes());
         log.info("DirectChatService: свободный чат с LLM ({}), история {} реплик, файлы: {} шт. до {} МБ, "
                         + "текст {} симв./файл, бюджет сессии {} токенов, TTL сессии {} (rag.llm.direct-max-file-mb "
-                        + "/ direct-max-files / direct-max-file-chars / direct-max-session-tokens / session-ttl-minutes)",
+                        + "/ direct-max-files / direct-max-file-chars / direct-max-session-tokens / session-ttl-minutes), авточистка файлов после ответа={}",
                 cfg.model(), cfg.historyTurns(), maxFiles, maxFileBytes / 1024 / 1024,
                 maxFileChars, maxSessionTokens,
-                cfg.sessionTtlMinutes() <= 0 ? "∞" : cfg.sessionTtlMinutes() + " мин");
+                cfg.sessionTtlMinutes() <= 0 ? "∞" : cfg.sessionTtlMinutes() + " мин", clearFilesAfterReply);
     }
 
-    public record DirectReply(String sessionId, String answer) {}
-
+    /** files — файлы, ОСТАВШИЕСЯ в сессии после ответа (пустой список при автоочистке):
+     *  UI перерисовывает чипы по этому полю. */
+    public record DirectReply(String sessionId, String answer, List<FileInfo> files) {}
     public DirectReply chat(String sessionId, String message) {
         String sid = (sessionId == null || sessionId.isBlank()) ? UUID.randomUUID().toString() : sessionId;
         Session s = sessions.get(sid, k -> new Session());
@@ -181,7 +189,14 @@ public class DirectChatService {
         String a = answer == null ? "" : answer.strip();
         if (!a.isBlank()) s.history.add(LlmClient.Message.assistant(a));
         while (s.history.size() > cfg.historyTurns() * 2) s.history.pollFirst();
-        return new DirectReply(sid, answer);
+        if (clearFilesAfterReply) {                    // файлы уходят только после УСПЕШНОГО ответа
+            int dropped = s.clearFiles();
+            if (dropped > 0) {
+                log.info("DIRECT: {} файл(ов) откреплены автоматически после ответа"
+                        + " (rag.llm.direct-clear-files-after-reply=true)", dropped);
+            }
+        }
+        return new DirectReply(sid, answer, s.filesInfo());
     }
 
     /* ---------- прикреплённые файлы ---------- */
