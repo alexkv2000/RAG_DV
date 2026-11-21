@@ -129,6 +129,21 @@
     <div id="perms"><div class="mono">загружаю…</div></div>
 </div>
 
+<!-- ==================== полный доступ (минуя ограничение по ЮЛ) ==================== -->
+<div class="acard">
+    <div class="ahead"><b>Полный доступ к документам всех ЮЛ</b>
+        <span>
+            <button type="button" class="sm" id="btnFaRefresh">⟳</button>
+            <button type="button" class="sm" id="btnAddFa">＋ Выдать доступ</button>
+        </span></div>
+    <div class="hint" style="margin-bottom:8px">Пользователи этого списка видят документы
+        <b>всех</b> юридических лиц, минуя привязку групп к ЮЛ (dbo.rag_full_access_users).
+        Логин — доменный sAMAccountName (как в таблице выше), <b>без домена</b>, нижний регистр.
+        «Кем выдано» фиксируется автоматически. Отзыв (✕ «активен») действует в течение минуты —
+        доступ кэшируется на стороне сервера.</div>
+    <div id="faUsers"><div class="mono">загружаю…</div></div>
+</div>
+
 <!-- ==================== модалка: пользователь ==================== -->
 <div class="overlay" id="userModal" hidden>
     <div class="modal">
@@ -182,6 +197,46 @@
     </div>
 </div>
 
+<!-- модалка: выдать/редактировать полный доступ -->
+<div class="overlay" id="faModal" hidden>
+    <div class="modal">
+        <div class="mh"><b id="faTitle">Полный доступ</b>
+            <button type="button" class="icobtn" data-close>✕</button></div>
+        <div class="mb">
+            <label class="f">Логин (sAMAccountName, без домена) *
+                <input id="faLogin" autocomplete="off" placeholder="helen"
+                       title="Как в AD и таблице «Пользователи» выше, например KvochkinAY">
+            </label>
+            <label class="f">Подпись (для чего выдан)
+                <input id="faName" autocomplete="off" placeholder="Смирнова Е.А. (управляющий директор ЦИТРБ)">
+            </label>
+            <div class="hint">Выдаст тот, кто нажмёт «Сохранить» — логин запишется в granted_by.</div>
+            <label class="chk single"><input type="checkbox" id="faActive" checked>
+                Активен (снятие = возврат к правам по группам)</label>
+        </div>
+        <div class="mf">
+            <button type="button" class="gray" data-close>Отмена</button>
+            <button type="button" id="faSave">💾 Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<!-- модалка: расширенный просмотр данных RAG от лица пользователя -->
+<div class="overlay" id="faViewModal" hidden>
+    <div class="modal" style="width:820px">
+        <div class="mh"><b id="favTitle">Просмотр</b>
+            <button type="button" class="icobtn" data-close>✕</button></div>
+        <div class="mb">
+            <div id="favStatus" class="mono"></div>
+            <div class="arow">
+                <input id="favSearch" placeholder="поиск по имени/номеру…" autocomplete="off">
+                <select id="favOrg" style="flex:none;min-width:0;width:220px"></select>
+            </div>
+            <div id="favCounts" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+            <div id="favDocs"></div>
+        </div>
+    </div>
+</div>
 <script type="module">
     console.info('RAG UI — управление доступом (перенос страницы из ProtocolMenagment)');
     const $ = id => document.getElementById(id);
@@ -399,6 +454,144 @@
         o.addEventListener('mousedown', e => { if (e.target === o) closeModals(); }));
     document.querySelectorAll('button[data-close]').forEach(b => b.onclick = closeModals);
 
+    /* ---------- полный доступ (минуя ЮЛ) ---------- */
+    const FAA = API + '/full-access';
+    let faRows = [], favLogin = null;
+    async function loadFa() {
+        try {
+            faRows = await api(FAA);
+            renderFa();
+        } catch (e) {
+            $('faUsers').innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
+        }
+    }
+    function renderFa() {
+        const el = $('faUsers');
+        if (!faRows.length) {
+            el.innerHTML = '<div class="mono">список пуст — полный доступ не выдан никому</div>';
+            return;
+        }
+        let h = '<table class="tbl"><tr><th>логин</th><th>подпись</th><th>кем выдано</th>'
+            + '<th>когда</th><th>активен</th><th style="width:110px"></th></tr>';
+        for (const r of faRows) {
+            const nm = r.ragFullName ? esc(r.displayName || r.ragFullName) + ' <span style="color:#999">(' + esc(r.ragFullName) + ')</span>' : esc(r.displayName || '');
+            h += '<tr><td class="mono">' + esc(r.domainLogin) + '</td><td>' + (nm || '—') + '</td>'
+                + '<td class="mono">' + esc(r.grantedBy || '') + '</td>'
+                + '<td class="mono">' + esc(String(r.grantedAt || '').replace('T', ' ').slice(0, 16)) + '</td>'
+                + '<td>' + (r.isActive ? '<span class="act">✓</span>' : '<span class="inact">✕</span>') + '</td>'
+                + '<td><button type="button" class="icobtn" data-v="' + esc(r.domainLogin) + '" title="Что видит пользователь">👁</button> '
+                + '<button type="button" class="icobtn" data-e="' + esc(r.domainLogin) + '" title="Редактировать">✎</button> '
+                + '<button type="button" class="icobtn del" data-d="' + esc(r.domainLogin) + '" title="Удалить">🗑</button></td></tr>';
+        }
+        el.innerHTML = h + '</table>';
+        el.querySelectorAll('button[data-e]').forEach(b => b.onclick = () =>
+            openFaModal(faRows.find(r => r.domainLogin === b.dataset.e)));
+        el.querySelectorAll('button[data-d]').forEach(b => b.onclick = () => delFa(b.dataset.d));
+        el.querySelectorAll('button[data-v]').forEach(b => b.onclick = () => viewFa(b.dataset.v));
+    }
+    let faEditLogin = null;
+    function openFaModal(r) {
+        faEditLogin = r ? r.domainLogin : null;
+        $('faTitle').textContent = r ? 'Полный доступ: ' + r.domainLogin : 'Выдать полный доступ';
+        $('faLogin').value = r ? r.domainLogin : '';
+        $('faLogin').disabled = !!r;              // логин не меняем — это ключ
+        $('faName').value = r ? (r.displayName || '') : '';
+        $('faActive').checked = r ? r.isActive : true;
+        $('faModal').hidden = false;
+        $('faLogin').focus();
+    }
+    async function saveFa() {
+        const login = $('faLogin').value.trim();
+        if (!login) { alert('Логин пустой'); return; }
+        const body = { domainLogin: login, displayName: $('faName').value.trim(),
+            isActive: $('faActive').checked };
+        try {
+            if (faEditLogin) await post(FAA + '/' + encodeURIComponent(faEditLogin), body, 'PUT');
+            else await post(FAA, body);
+            closeModals();
+            stat('✓ полный доступ ' + (faEditLogin ? 'обновлён' : 'выдан') + ': ' + login.toLowerCase());
+            loadFa();
+        } catch (e) { alert('Не сохранено: ' + e.message); }
+    }
+    async function delFa(login) {
+        if (!confirm('Удалить ' + login + ' из списка полного доступа?\n'
+            + 'Пользователь вернётся к правам своих групп (в течение минуты).')) return;
+        try {
+            await api(FAA + '/' + encodeURIComponent(login), {method: 'DELETE'});
+            stat('полный доступ отозван: ' + login);
+            loadFa();
+        } catch (e) { stat(e.message, true); }
+    }
+    /* ---------- расширенный просмотр: что видит пользователь ---------- */
+    async function viewFa(login) {
+        favLogin = login;
+        $('favTitle').textContent = 'Просмотр от лица ' + login;
+        $('faViewModal').hidden = false;
+        $('favSearch').value = '';
+        await loadFaPreview();
+    }
+    let favTimer = null;
+    $('favSearch').oninput = () => {
+        clearTimeout(favTimer);
+        favTimer = setTimeout(loadFaPreview, 400);          // debounce поиска
+    };
+    $('favOrg').onchange = loadFaPreview;
+    async function loadFaPreview() {
+        const el = $('favDocs');
+        el.innerHTML = '<div class="mono">загружаю…</div>';
+        const q = new URLSearchParams({login: favLogin});
+        if ($('favSearch').value.trim()) q.set('search', $('favSearch').value.trim());
+        const sel = $('favOrg').value;
+        if (sel !== null && sel !== '' && sel !== '__all') q.set('filterOrg', sel === '__shared' ? '' : sel);
+        try {
+            const j = await api(FAA + '/preview?' + q);
+            renderFavStatus(j);
+            renderFavDocs(j.documents);
+        } catch (e) {
+            el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
+        }
+    }
+    function renderFavStatus(j) {
+        const c = j.counts;
+        $('favStatus').innerHTML = j.fullAccess
+            ? '<span class="mono ok">✓ полный доступ включён — фильтр по ЮЛ снят</span>'
+            : '<span class="mono bad">✕ доступа нет — видит только документы своих групп (общие: '
+            + c.shared + ')</span>';
+        // селект ЮЛ: все + общие + каждое ЮЛ
+        const cur = $('favOrg').value;
+        let h = '<option value="__all">Все доступные ЮЛ</option><option value="__shared">Только общие</option>';
+        for (const o of j.byOrg) {
+            if (String(o.orgLe || '') === '') continue;
+            h += '<option value="' + esc(o.orgLe) + '">' + esc(o.orgLe) + ' (' + o.docs + ')</option>';
+        }
+        $('favOrg').innerHTML = h;
+        if (cur) $('favOrg').value = cur;
+        // бейджи-счётчики
+        const chip = (t, v, color) => '<span class="sb">' + t + ': <b style="color:' + color + '">' + v + '</b></span>';
+        $('favCounts').innerHTML = chip('всего в базе', c.total, '#333')
+            + chip('общие (org_le пусто)', c.shared, '#2e7d32')
+            + chip('своё ЮЛ', c.own, '#1976d2')
+            + chip('чужие ЮЛ — только из-за полного доступа', c.crossLe, c.crossLe ? '#e65100' : '#888');
+    }
+    function renderFavDocs(docs) {
+        const el = $('favDocs');
+        if (!docs.length) { el.innerHTML = '<div class="mono">под фильтр ничего не попало</div>'; return; }
+        let h = '<table class="tbl"><tr><th>документ</th><th>№</th><th>ЮЛ</th><th>признак</th><th></th></tr>';
+        for (const d of docs) {
+            h += '<tr><td><span class="gw" style="max-width:280px" title="' + esc(d.name || '') + '">'
+                + esc(d.name || d.guid) + '</span></td>'
+                + '<td class="mono">' + esc(d.number || '') + '</td>'
+                + '<td>' + (d.orgLe ? '<span class="sb">' + esc(d.orgLe) + '</span>' : '<span style="color:#2e7d32">общий</span>') + '</td>'
+                + '<td>' + esc(d.classifier || '') + '</td>'
+                + '<td>' + (d.crossLe ? '<span class="sb" style="border-color:#e65100;color:#e65100" title="Виден только благодаря полному доступу">чужое ЮЛ</span>' : '') + '</td></tr>';
+        }
+        el.innerHTML = h + '</table><div class="hint" style="margin-top:4px">показаны первые '
+            + docs.length + ' по дате изменения в DocsVision</div>';
+    }
+    $('btnFaRefresh').onclick = loadFa;
+    $('btnAddFa').onclick = () => openFaModal(null);
+    $('faSave').onclick = saveFa;
+
     /* ---------- шапка ---------- */
     async function renderMe() {
         try {
@@ -425,6 +618,6 @@
     $('umSave').onclick = saveUser;
     $('gmSave').onclick = saveGroup;
 
-    await Promise.all([renderMe(), loadAll()]);
+    await Promise.all([renderMe(), loadAll(), loadFa()]);
 </script>
 </body></html>
