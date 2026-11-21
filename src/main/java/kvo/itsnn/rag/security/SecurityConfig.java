@@ -36,6 +36,28 @@ import java.util.List;
 @EnableMethodSecurity
 public class SecurityConfig {
 
+    /* ---------- права RAG (dbo.rag_permission.name; засев — sql/rag_security.sql).
+       Одно место правды для hasAnyAuthority ниже и @PreAuthorize в контроллерах. */
+    private static final String USE_CHAT = "use:chat";
+    private static final String USE_EXTRACT = "use:extract";
+    private static final String READ_ADMIN = "read:admin";
+    private static final String EDIT_ADMIN = "edit:admin";
+    private static final String EDIT_PROMPTS = "edit:prompts";
+    private static final String RUN_EVAL = "run:eval";
+    private static final String EDIT_USERS = "edit:users";
+    /** Право-«мастер-ключ»: присутствует во всех списках прав выше по цепочке правил. */
+    private static final String SUPER_ADMIN = "superAdmin";
+
+    /* ---------- URL-шаблоны, встречающиеся в правилах больше одного раза ---------- */
+    private static final String URL_ADMIN = "/api/rag/admin/**";
+    private static final String URL_ADMIN_PROMPTS = "/api/rag/admin/prompts/**";
+    private static final String URL_ADMIN_EVAL = "/api/rag/admin/eval/**";
+    private static final String URL_EXTRACT = "/api/rag/extract/**";
+    private static final String URL_API = "/api/rag/**";
+    /** Страница управления доступом (/useradmin — алиас, forward на admin-users.html). */
+    private static final String URL_USERADMIN = "/useradmin";
+    private static final String URL_USERADMIN_PAGE = "/admin-users.html";
+
     @Value("${spring.ldap.urls}")
     private String ldapUrl;
     @Value("${ldap.admin.username}")
@@ -48,7 +70,7 @@ public class SecurityConfig {
     private String ldapUserSearchFilter;
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) {
         // API-запросы без сессии → 401 (JSON-фронт сам перебросит на /login.html)
         PathPatternRequestMatcher api = PathPatternRequestMatcher.withDefaults().matcher("/api/**");
         http
@@ -57,37 +79,38 @@ public class SecurityConfig {
                         // статика и логин — без аутентификации
                         .requestMatchers("/login", "/login.html", "/error", "/favicon.ico",
                                 "/css/**", "/js/**", "/lib/**").permitAll()
-                        .requestMatchers("/useradmin", "/admin-users.html")
-                        .hasAnyAuthority("edit:users", "superAdmin")
+                        // страница управления доступом — edit:users/superAdmin
+                        .requestMatchers(URL_USERADMIN, URL_USERADMIN_PAGE)
+                        .hasAnyAuthority(EDIT_USERS, SUPER_ADMIN)
                         // управление пользователями/группами
                         .requestMatchers("/api/rag/admin/security/**")
-                        .hasAnyAuthority("edit:users", "superAdmin")
+                        .hasAnyAuthority(EDIT_USERS, SUPER_ADMIN)
                         // промпты: чтение — просмотр админки, запись — edit:prompts
-                        .requestMatchers(HttpMethod.GET, "/api/rag/admin/prompts/**")
-                        .hasAnyAuthority("read:admin", "edit:prompts", "superAdmin")
-                        .requestMatchers("/api/rag/admin/prompts/**")
-                        .hasAnyAuthority("edit:prompts", "superAdmin")
+                        .requestMatchers(HttpMethod.GET, URL_ADMIN_PROMPTS)
+                        .hasAnyAuthority(READ_ADMIN, EDIT_PROMPTS, SUPER_ADMIN)
+                        .requestMatchers(URL_ADMIN_PROMPTS)
+                        .hasAnyAuthority(EDIT_PROMPTS, SUPER_ADMIN)
                         // eval: чтение истории/вопросов — read:admin, прогоны — run:eval
-                        .requestMatchers(HttpMethod.GET, "/api/rag/admin/eval/**")
-                        .hasAnyAuthority("read:admin", "run:eval", "superAdmin")
-                        .requestMatchers("/api/rag/admin/eval/**")
-                        .hasAnyAuthority("run:eval", "superAdmin")
+                        .requestMatchers(HttpMethod.GET, URL_ADMIN_EVAL)
+                        .hasAnyAuthority(READ_ADMIN, RUN_EVAL, SUPER_ADMIN)
+                        .requestMatchers(URL_ADMIN_EVAL)
+                        .hasAnyAuthority(RUN_EVAL, SUPER_ADMIN)
                         // остальная админка: GET — read:admin, управление — edit:admin
-                        .requestMatchers(HttpMethod.GET, "/api/rag/admin/**")
-                        .hasAnyAuthority("read:admin", "superAdmin")
-                        .requestMatchers("/api/rag/admin/**")
-                        .hasAnyAuthority("edit:admin", "superAdmin")
+                        .requestMatchers(HttpMethod.GET, URL_ADMIN)
+                        .hasAnyAuthority(READ_ADMIN, SUPER_ADMIN)
+                        .requestMatchers(URL_ADMIN)
+                        .hasAnyAuthority(EDIT_ADMIN, SUPER_ADMIN)
                         // интеграция «файл → JSON»
-                        .requestMatchers("/api/rag/extract/**")
-                        .hasAnyAuthority("use:extract", "superAdmin")
+                        .requestMatchers(URL_EXTRACT)
+                        .hasAnyAuthority(USE_EXTRACT, SUPER_ADMIN)
                         // «кто я» — любому аутентифицированному (UI рисует вкладки по правам)
                         .requestMatchers("/api/rag/me").authenticated()
                         // чаты, поиск, классификаторы, direct-chat
-                        .requestMatchers("/api/rag/**")
-                        .hasAnyAuthority("use:chat", "use:extract", "superAdmin")
+                        .requestMatchers(URL_API)
+                        .hasAnyAuthority(USE_CHAT, USE_EXTRACT, SUPER_ADMIN)
                         // главная страница чата
                         .requestMatchers("/", "/index.html")
-                        .hasAnyAuthority("use:chat", "superAdmin")
+                        .hasAnyAuthority(USE_CHAT, SUPER_ADMIN)
                         .anyRequest().authenticated()
                 )
                 .formLogin(form -> form

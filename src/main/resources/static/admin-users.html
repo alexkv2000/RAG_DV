@@ -291,7 +291,7 @@
     async function delUser(id) {
         const u = users.find(x => x.id === id);
         if (!u) return;
-        const self = window.ragMe && u.accountName === window.ragMe.accountName;
+        const self = globalThis.ragMe && u.accountName === globalThis.ragMe.accountName;
         if (!confirm('Удалить пользователя ' + u.accountName + '?'
             + (self ? '\n\nВНИМАНИЕ: это ВАША учётная запись — после удаления вы не сможете войти!' : ''))) return;
         try {
@@ -400,18 +400,20 @@
     document.querySelectorAll('button[data-close]').forEach(b => b.onclick = closeModals);
 
     /* ---------- шапка ---------- */
-    async function renderMe() {
+    aasync function renderMe() {
         try {
-            const me = await fetch('/api/rag/me').then(r => r.ok ? r.json() : null);
+            const r = await fetch('/api/rag/me');
+            const me = r.ok ? await r.json() : null;
             if (!me) return;
-            window.ragMe = me;
+            globalThis.ragMe = me;
             $('whoami').textContent = 'Вы: ' + (String(me.fullName || '').trim() || me.accountName)
                 + ' (' + me.accountName + ') · права: ' + (me.permissions || []).join(', ');
         } catch (e) { console.debug('me не получен: ', e); }
     }
 
     $('logout').onclick = async () => {
-        try { sessionStorage.setItem('ragLastLogin', window.ragMe?.accountName || ''); } catch (e) { /* noop */ }
+        try { sessionStorage.setItem('ragLastLogin', globalThis.ragMe?.accountName || ''); }
+        catch (e) { console.debug('ragLastLogin не записан (sessionStorage недоступен): ', e); }
         await fetch('/logout', {method: 'POST'}).catch(() => {});
         location.href = '/login.html';
     };
@@ -423,7 +425,6 @@
     $('umSave').onclick = saveUser;
     $('gmSave').onclick = saveGroup;
 
-    renderMe();
-    loadAll();
+    await Promise.all([renderMe(), loadAll()]);
 </script>
 </body></html>

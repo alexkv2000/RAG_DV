@@ -45,6 +45,6 @@
             msg.textContent = 'Вы вышли из учётной записи ' + last + '.';
             sessionStorage.removeItem('ragLastLogin');
         }
-    } catch (e) {}
+    } catch (e) { console.debug(e); }
 </script>
 </body></html>

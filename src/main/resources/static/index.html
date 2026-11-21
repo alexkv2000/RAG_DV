@@ -235,7 +235,7 @@
         <button>➤</button>
     </form>
     <input type="file" id="df" hidden
-    accept=".pdf,.doc,.docx,.rtf,.txt,.csv,.html,.htm,.xlsx,.xls,.xlsm,.msg,.png,.jpg,.jpeg,.tif,.tiff">
+           accept=".pdf,.doc,.docx,.rtf,.txt,.csv,.html,.htm,.xlsx,.xls,.xlsm,.msg,.png,.jpg,.jpeg,.tif,.tiff">
 </div>
 
 <!-- ==================== вкладка «Админ» ==================== -->
@@ -412,7 +412,8 @@
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
     const cls = document.getElementById('cls');
-    /* ---------- учётная запись текущего пользователя: GET /api/rag/me ---------- */
+    /* ---------- учётная запись текущего пользователя: GET /api/rag/me ----------
+       Вызов — в конце скрипта (top-level await), чтобы инициализация чата не ждала сети. */
     async function renderMe() {
         const el = document.getElementById('whoami');
         try {
@@ -420,7 +421,7 @@
             if (r.status === 401) { location.href = '/login.html'; return; }   // сессия умерла — на логин
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const me = await r.json();
-            window.ragMe = me;                       // logout покажет логин на странице входа
+            globalThis.ragMe = me;                   // logout покажет логин на странице входа
             const login = String(me.accountName || '?');
             const name = String(me.fullName || '').trim() || login;   // ФИО нет — показываем логин
             el.textContent = '';                    // пересобираем: имя + метка «админ»
@@ -450,11 +451,11 @@
             console.warn('Учётная запись не получена (подпись скрыта): ', e);
         }
     }
-    renderMe();
 
     /* выход: запоминаем логин для страницы входа, убиваем сессию */
     document.getElementById('logout').onclick = async () => {
-        try { sessionStorage.setItem('ragLastLogin', window.ragMe?.accountName || ''); } catch (e) { /* noop */ }
+        try { sessionStorage.setItem('ragLastLogin', globalThis.ragMe?.accountName || ''); }
+        catch (e) { console.debug('ragLastLogin не записан (sessionStorage недоступен): ', e); }
         await fetch('/logout', {method: 'POST'}).catch(() => {});
         location.href = '/login.html';
     };
@@ -1643,6 +1644,11 @@
     setInterval(() => {
         if (!viewAdmin.hidden && !document.hidden) loadStats();
     }, 20000);
+
+    /* Sonar S6550 (top-level await): вызов «кто я» стоит ПОСЛЕДНИМ — до него страница
+       уже полностью инициализирована (вкладки, режим, обработчики), и ничто не ждёт сеть.
+       Ошибки внутри renderMe гасятся её же catch, await безопасен. */
+    await renderMe();
 </script>
 </body>
 </html>
