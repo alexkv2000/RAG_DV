@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Вход — RAG</title><style>
+    :root{--c-primary:#1976d2;--c-primary-hover:#1565c0;--c-border:#d0d0d0;
+        --c-err:#c62828;--c-err-bg:#ffebee;--r:4px}
+    body{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;background:#f5f5f5;color:#333;
+        display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+    .card{background:#fff;border:1px solid #ddd;border-radius:var(--r);padding:28px 30px;
+        width:340px;box-sizing:border-box;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+    h3{margin:0 0 4px;font-size:20px;font-weight:600}
+    p.sub{margin:0 0 18px;font-size:13px;color:#666}
+    label{display:block;font-size:12px;color:#666;margin:12px 0 4px}
+    input{width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;padding:9px 12px;
+        border:1px solid var(--c-border);border-radius:var(--r);transition:border-color .15s,box-shadow .15s}
+    input:focus{outline:none;border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(25,118,210,.12)}
+    button{width:100%;margin-top:18px;padding:10px;border:none;border-radius:var(--r);
+        background:var(--c-primary);color:#fff;font-size:14px;font-family:inherit;cursor:pointer}
+    button:hover{background:var(--c-primary-hover)}
+    .msg{margin-top:14px;padding:8px 12px;border-radius:var(--r);font-size:13px;display:none}
+    .msg.err{display:block;background:var(--c-err-bg);color:var(--c-err);border:1px solid #ef9a9a}
+    .msg.ok{display:block;background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7}
+</style></head><body>
+<div class="card">
+    <h3>Чат по базе знаний DocsVision</h3>
+    <p class="sub">Войдите доменной учётной записью (AD)</p>
+    <form method="post" action="/login">
+        <label for="username">Логин (доменный)</label>
+        <input id="username" name="username" type="text" autofocus>
+        <label for="password">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="current-password">
+        <button type="submit">Войти</button>
+    </form>
+    <div id="msg" class="msg"></div>
+</div>
+<script>
+    const q = new URLSearchParams(location.search);
+    const msg = document.getElementById('msg');
+    if (q.get('error'))   { msg.className = 'msg err'; msg.textContent = 'Неверный логин или пароль, либо логина нет в системе RAG.'; }
+    if (q.get('logout'))  { msg.className = 'msg ok';  msg.textContent = 'Вы вышли из системы.'; }
+    if (q.get('expired')) { msg.className = 'msg err'; msg.textContent = 'Сессия истекла — войдите снова.'; }
+
+    try {
+        const last = sessionStorage.getItem('ragLastLogin');
+        if (last && !q.get('error')) {
+            msg.className = 'msg ok';
+            msg.textContent = 'Вы вышли из учётной записи ' + last + '.';
+            sessionStorage.removeItem('ragLastLogin');
+        }
+    } catch (e) {}
+</script>
+</body></html>

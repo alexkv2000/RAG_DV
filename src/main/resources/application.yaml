@@ -2,7 +2,12 @@ server:
   address: 0.0.0.0
   tomcat:
     max-part-header-size: 8KB # снимает ограничение размера заголовка файла для /api/rag/extract
+  servlet:
+    session:
+      timeout: 600m   # 10 часов, как в ProtocolMenagment
 spring:
+  ldap:
+    urls: ldap://gaz.ru:389
   servlet:
     multipart:            # Spring Boot 4.x — свойство здесь
       max-file-size: 64MB
@@ -17,6 +22,12 @@ spring:
     url: jdbc:sqlserver://${DB_SERVER}:1433;databaseName=GAZ;encrypt=true;trustServerCertificate=true;packetSize=32767
     username: ${DB_USER}
     password: ${DB_PASSWORD}
+ldap:
+  admin:
+    username: DVStorage@gaz.ru
+    password: ${LDAP_PASSWORD}
+  base-dn: dc=gaz,dc=ru                 # корень поиска в AD
+  user-search-filter: (sAMAccountName={0})
 rag:
   rerank: # стадия-2 поиска: кросс-энкодер переупорядочивает кандидатов Chroma
     enabled: true               # false - включить после скачивания модели - true (readmy.txt, раздел «Реранкер»)

@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Управление доступом — RAG</title><style>
+    /* ===== та же корпоративная палитра, что в index.html ===== */
+    :root{
+        --c-primary:#1976d2;        --c-primary-hover:#1565c0;   --c-primary-active:#0d47a1;
+        --c-primary-light:#e3f2fd;  --c-primary-lighter:#bbdefb;
+        --c-border:#d0d0d0;         --c-border-hover:#b0b0b0;    --c-border-soft:#e0e0e0;
+        --c-border-table:#ddd;      --c-bg:#f5f5f5;              --c-card:#fff;
+        --c-section:#fafafa;        --c-text:#333;               --c-text-2:#666; --c-text-3:#888;
+        --c-ok:#2e7d32;  --c-ok-bg:#e8f5e9; --c-err:#c62828; --c-err-bg:#ffebee;
+        --r:4px;
+    }
+    body{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;max-width:1100px;margin:24px auto;
+        background:var(--c-bg);padding:0 12px;color:var(--c-text);font-size:14px}
+
+    /* ===== шапка ===== */
+    #top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+    #top h3{display:flex;align-items:center;gap:8px;font-size:20px;font-weight:600}
+    .ver{font-size:11px;color:#174ea6;font-weight:600;background:#e3ecf7;padding:1px 8px;border-radius:10px}
+    #topRight{display:flex;gap:6px;flex-wrap:wrap}
+    #whoami{display:block;font-size:11px;color:var(--c-text-3);margin:6px 0 2px}
+
+    /* ===== поля и кнопки — как в index.html ===== */
+    input,textarea{font-family:inherit;font-size:13px;color:var(--c-text);
+        padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--r);background:#fff;
+        box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease;width:100%}
+    input:focus{outline:none;border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(25,118,210,.12)}
+    input:hover{border-color:var(--c-border-hover)}
+    input[type=checkbox]{width:auto;padding:0;cursor:pointer}
+    input[type=checkbox]:focus{box-shadow:none}
+    button{padding:8px 16px;border:none;border-radius:var(--r);background-color:var(--c-primary);color:#fff;
+        font-family:inherit;font-size:13px;cursor:pointer;transition:background-color .15s ease,opacity .15s ease}
+    button:hover{background-color:var(--c-primary-hover)}
+    button:active{background-color:var(--c-primary-active)}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    button.gray{background:#fff;color:#555;border:1px solid var(--c-border)}
+    button.gray:hover{background:#f5f5f5;border-color:var(--c-border-hover);color:#555}
+    .sm{padding:5px 12px;font-size:12px;background:#fff;color:var(--c-text-2);border:1px solid var(--c-border)}
+    .sm:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
+
+    /* ===== карточки ===== */
+    .acard{border:1px solid var(--c-border-table);border-radius:var(--r);padding:15px;background:var(--c-card);
+        margin-top:16px}
+    .ahead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;
+        padding-bottom:8px;border-bottom:1px solid var(--c-border-soft)}
+    .ahead b{font-size:14px;font-weight:600}
+    .hint{font-size:11.5px;color:var(--c-text-3);line-height:1.5}
+    .mono{font-family:Consolas,"Courier New",monospace;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
+    .mono.ok{color:var(--c-ok)}
+    .mono.bad{color:var(--c-err)}
+    .inact{color:var(--c-err);font-weight:700}
+    .act{color:var(--c-ok);font-weight:700}
+
+    /* ===== таблицы ===== */
+    .tbl{width:100%;border-collapse:collapse;font-size:13px}
+    .tbl th{text-align:left;color:var(--c-text-2);font-weight:600;padding:8px 10px;
+        background:var(--c-section);border-bottom:1px solid var(--c-border-table);white-space:nowrap}
+    .tbl td{padding:7px 10px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word}
+    .tbl tbody tr:hover{background:#f9f9f9}
+    .gw{display:inline-block;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+        vertical-align:bottom}
+
+    /* ===== чипы групп/прав ===== */
+    .sb{display:inline-block;background:#fff;border:1px solid var(--c-border-soft);border-radius:var(--r);
+        padding:2px 8px;margin:1px 4px 1px 0;font-size:12px;color:var(--c-text-2)}
+    .sb b{font-size:12.5px}
+
+    /* ===== кнопки-иконки в строках таблицы ===== */
+    .icobtn{padding:3px 9px;font-size:13px;background:#fff;color:var(--c-text-2);
+        border:1px solid var(--c-border);border-radius:3px;line-height:1.4}
+    .icobtn:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
+    .icobtn.del:hover{background:var(--c-err-bg);border-color:var(--c-err);color:var(--c-err)}
+
+    /* ===== модальные окна ===== */
+    .overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;
+        justify-content:center;z-index:10}
+    .overlay[hidden]{display:none}
+    .modal{background:#fff;border-radius:var(--r);width:540px;max-width:94vw;max-height:88vh;
+        overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,.25)}
+    .modal .mh{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;
+        border-bottom:1px solid var(--c-border-soft)}
+    .modal .mh b{font-size:15px}
+    .modal .mb{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+    .modal .mf{padding:12px 16px;border-top:1px solid var(--c-border-soft);display:flex;gap:8px;justify-content:flex-end}
+    label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--c-text-2)}
+    .lbl{font-size:12px;color:var(--c-text-2)}
+    .chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text);cursor:pointer}
+    .chkbox-area{border:1px solid var(--c-border-soft);border-radius:var(--r);padding:8px 10px;
+        display:flex;flex-direction:column;gap:6px;max-height:230px;overflow-y:auto;background:#fff}
+    .chk.single{margin:0}
+</style></head><body>
+
+<div id="top">
+    <h3>Управление доступом <span class="ver">RAG</span></h3>
+    <div id="topRight">
+        <button type="button" class="gray" id="btnBack" title="Вернуться в чат">← К чату</button>
+        <button type="button" class="sm" id="btnRefreshAll">⟳ Обновить</button>
+        <button type="button" class="sm" id="logout">Выйти</button>
+    </div>
+</div>
+<span id="whoami"></span>
+<div id="stat" class="mono" style="margin-top:6px"></div>
+
+<!-- ==================== пользователи ==================== -->
+<div class="acard">
+    <div class="ahead"><b>Пользователи</b>
+        <button type="button" class="sm" id="btnAddUser">＋ Добавить пользователя</button></div>
+    <div class="hint" style="margin-bottom:8px">Логин — доменная учётная запись AD (пароль проверяет AD, в RAG не хранится).
+        Логина нет в AD или в этой таблице — вход не пройдёт. <b>Изменения групп действуют после повторного входа
+            пользователя</b> (права читаются при логине).</div>
+    <div id="users"><div class="mono">загружаю…</div></div>
+</div>
+
+<!-- ==================== группы ==================== -->
+<div class="acard">
+    <div class="ahead"><b>Группы</b>
+        <button type="button" class="sm" id="btnAddGroup">＋ Добавить группу</button></div>
+    <div class="hint" style="margin-bottom:8px">Группа — набор прав; пользователю выдаются группы
+        (dbo.rag_user_group), группе — права (dbo.rag_group_permission).</div>
+    <div id="groups"><div class="mono">загружаю…</div></div>
+</div>
+
+<!-- ==================== справочник прав ==================== -->
+<div class="acard">
+    <div class="ahead"><b>Права (справочник, только чтение)</b>
+        <button type="button" class="sm" id="btnRefreshPerms">⟳</button></div>
+    <div class="hint" style="margin-bottom:8px">Строки засеяны скриптом rag_security.sql; новые права добавляются
+        INSERT'ом в dbo.rag_permission (name — строка для hasAuthority в SecurityConfig).</div>
+    <div id="perms"><div class="mono">загружаю…</div></div>
+</div>
+
+<!-- ==================== модалка: пользователь ==================== -->
+<div class="overlay" id="userModal" hidden>
+    <div class="modal">
+        <div class="mh"><b id="umTitle">Новый пользователь</b>
+            <button type="button" class="icobtn" data-close>✕</button></div>
+        <div class="mb">
+            <label class="f">Логин (доменный, sAMAccountName) *
+                <input id="umLogin" autocomplete="off" placeholder="например, KvochkinAY">
+            </label>
+            <label class="f">ФИО
+                <input id="umName" autocomplete="off" placeholder="Иванов Иван Иванович">
+            </label>
+            <label class="f">E-mail
+                <input id="umEmail" autocomplete="off" placeholder="iivanov@gaz.ru">
+            </label>
+            <div>
+                <div class="lbl" style="margin-bottom:4px">Группы (наборы прав)</div>
+                <div class="chkbox-area" id="umGroups"></div>
+            </div>
+            <label class="chk single"><input type="checkbox" id="umActive" checked>
+                Активен (снятый флаг — вход запрещён)</label>
+        </div>
+        <div class="mf">
+            <button type="button" class="gray" data-close>Отмена</button>
+            <button type="button" id="umSave">💾 Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== модалка: группа ==================== -->
+<div class="overlay" id="groupModal" hidden>
+    <div class="modal">
+        <div class="mh"><b id="gmTitle">Новая группа</b>
+            <button type="button" class="icobtn" data-close>✕</button></div>
+        <div class="mb">
+            <label class="f">Название *
+                <input id="gmName" autocomplete="off" placeholder="RAG — пользователи">
+            </label>
+            <label class="f">Описание
+                <input id="gmDescr" autocomplete="off" placeholder="Для чего эта группа">
+            </label>
+            <div>
+                <div class="lbl" style="margin-bottom:4px">Права группы</div>
+                <div class="chkbox-area" id="gmPerms"></div>
+            </div>
+        </div>
+        <div class="mf">
+            <button type="button" class="gray" data-close>Отмена</button>
+            <button type="button" id="gmSave">💾 Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    console.info('RAG UI — управление доступом (перенос страницы из ProtocolMenagment)');
+    const $ = id => document.getElementById(id);
+    const API = '/api/rag/admin/security';
+
+    /* ---------- общие ---------- */
+    const esc = s => String(s ?? '')
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+    async function api(url, opts) {
+        const r = await fetch(url, opts);
+        if (r.status === 401) { location.href = '/login.html'; throw new Error('требуется вход'); }
+        let j = {};
+        try { j = await r.json(); } catch (e) { console.debug('Ответ не JSON: ', e); }
+        if (!r.ok) throw new Error(String(j.error || ('HTTP ' + r.status)));
+        return j;
+    }
+
+    function post(url, body, method) {
+        return api(url, {
+            method: method || 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+    }
+
+    function stat(msg, err) {
+        const el = $('stat');
+        el.className = 'mono ' + (err ? 'bad' : 'ok');
+        el.textContent = '[' + new Date().toLocaleTimeString('ru-RU') + '] ' + msg;
+    }
+
+    /* ---------- данные ---------- */
+    let users = [], groups = [], perms = [];
+
+    async function loadAll() {
+        try {
+            [users, groups, perms] = await Promise.all([
+                api(API + '/users'), api(API + '/groups'), api(API + '/permissions')
+            ]);
+            renderUsers(); renderGroups(); renderPerms();
+            stat('загружено: пользователей=' + users.length + ', групп=' + groups.length);
+        } catch (e) {
+            stat(e.message, true);
+            if (String(e.message).includes('нет прав'))
+                stat('Нет права edit:users/superAdmin — страница недоступна', true);
+        }
+    }
+
+    /* ---------- пользователи ---------- */
+    function renderUsers() {
+        const el = $('users');
+        if (!users.length) { el.innerHTML = '<div class="mono">пользователей нет — добавьте первого</div>'; return; }
+        const gname = new Map(groups.map(g => [g.id, g.name]));
+        let h = '<table class="tbl"><tr><th>логин</th><th>ФИО</th><th>e-mail</th>'
+            + '<th>группы</th><th>активен</th><th style="width:70px"></th></tr>';
+        for (const u of users) {
+            const chips = (u.groupIds || []).map(id =>
+                '<span class="sb">' + esc(gname.get(id) ?? ('#' + id)) + '</span>').join('');
+            h += '<tr><td class="mono">' + esc(u.accountName) + '</td>'
+                + '<td><span class="gw" title="' + esc(u.fullName || '') + '">' + esc(u.fullName || '') + '</span></td>'
+                + '<td><span class="gw" title="' + esc(u.email || '') + '">' + esc(u.email || '') + '</span></td>'
+                + '<td>' + (chips || '<span style="color:#999">—</span>') + '</td>'
+                + '<td>' + (u.isActive ? '<span class="act">✓</span>' : '<span class="inact">✕</span>') + '</td>'
+                + '<td><button type="button" class="icobtn" data-e="' + u.id + '" title="Редактировать">✎</button> '
+                + '<button type="button" class="icobtn del" data-d="' + u.id + '" title="Удалить">🗑</button></td></tr>';
+        }
+        el.innerHTML = h + '</table>';
+        el.querySelectorAll('button[data-e]').forEach(b =>
+            b.onclick = () => openUserModal(users.find(u => u.id === +b.dataset.e)));
+        el.querySelectorAll('button[data-d]').forEach(b => b.onclick = () => delUser(+b.dataset.d));
+    }
+
+    let editUserId = null;
+
+    function openUserModal(u) {
+        editUserId = u ? u.id : null;
+        $('umTitle').textContent = u ? 'Пользователь: ' + u.accountName : 'Новый пользователь';
+        $('umLogin').value = u ? (u.accountName || '') : '';
+        $('umName').value = u ? (u.fullName || '') : '';
+        $('umEmail').value = u ? (u.email || '') : '';
+        $('umActive').checked = u ? !!u.isActive : true;
+        $('umGroups').innerHTML = checksHtml(groups, u ? u.groupIds : [],
+            g => esc(g.name), g => esc(g.description || ''));
+        $('userModal').hidden = false;
+        $('umLogin').focus();
+    }
+
+    async function saveUser() {
+        const login = $('umLogin').value.trim();
+        if (!login) { alert('Логин пустой — укажите доменный логин из AD'); return; }
+        const body = {
+            fullName: $('umName').value.trim(),
+            accountName: login,
+            email: $('umEmail').value.trim(),
+            isActive: $('umActive').checked,
+            groupIds: [...$('umGroups').querySelectorAll('input:checked')].map(c => +c.value)
+        };
+        try {
+            if (editUserId) await post(API + '/users/' + editUserId, body, 'PUT');
+            else await post(API + '/users', body);
+            closeModals();
+            stat('✓ пользователь ' + login + ' сохранён' + (editUserId ? '' : ' — напомните ему войти заново'));
+            loadAll();
+        } catch (e) { alert('Не сохранено: ' + e.message); }
+    }
+
+    async function delUser(id) {
+        const u = users.find(x => x.id === id);
+        if (!u) return;
+        const self = window.ragMe && u.accountName === window.ragMe.accountName;
+        if (!confirm('Удалить пользователя ' + u.accountName + '?'
+            + (self ? '\n\nВНИМАНИЕ: это ВАША учётная запись — после удаления вы не сможете войти!' : ''))) return;
+        try {
+            await api(API + '/users/' + id, {method: 'DELETE'});
+            stat('пользователь ' + u.accountName + ' удалён');
+            loadAll();
+        } catch (e) { stat(e.message, true); }
+    }
+
+    /* ---------- группы ---------- */
+    function renderGroups() {
+        const el = $('groups');
+        if (!groups.length) { el.innerHTML = '<div class="mono">групп нет — добавьте первую</div>'; return; }
+        const pname = new Map(perms.map(p => [p.id, p.name]));
+        let h = '<table class="tbl"><tr><th>название</th><th>описание</th><th>права</th><th style="width:70px"></th></tr>';
+        for (const g of groups) {
+            const chips = (g.permissionIds || []).map(id =>
+                '<span class="sb mono">' + esc(pname.get(id) ?? ('#' + id)) + '</span>').join('');
+            h += '<tr><td><b>' + esc(g.name) + '</b></td>'
+                + '<td><span class="gw" title="' + esc(g.description || '') + '">' + esc(g.description || '') + '</span></td>'
+                + '<td>' + (chips || '<span style="color:#999">—</span>') + '</td>'
+                + '<td><button type="button" class="icobtn" data-e="' + g.id + '" title="Редактировать">✎</button> '
+                + '<button type="button" class="icobtn del" data-d="' + g.id + '" title="Удалить">🗑</button></td></tr>';
+        }
+        el.innerHTML = h + '</table>';
+        el.querySelectorAll('button[data-e]').forEach(b =>
+            b.onclick = () => openGroupModal(groups.find(g => g.id === +b.dataset.e)));
+        el.querySelectorAll('button[data-d]').forEach(b => b.onclick = () => delGroup(+b.dataset.d));
+    }
+
+    let editGroupId = null;
+
+    function openGroupModal(g) {
+        editGroupId = g ? g.id : null;
+        $('gmTitle').textContent = g ? 'Группа: ' + g.name : 'Новая группа';
+        $('gmName').value = g ? (g.name || '') : '';
+        $('gmDescr').value = g ? (g.description || '') : '';
+        $('gmPerms').innerHTML = checksHtml(perms, g ? g.permissionIds : [],
+            p => esc(p.name), p => esc((p.controllerName || '') + ' · ' + (p.httpMethod || '') + ' ' + (p.urlPattern || '')));
+        $('groupModal').hidden = false;
+        $('gmName').focus();
+    }
+
+    async function saveGroup() {
+        const name = $('gmName').value.trim();
+        if (!name) { alert('Название пустое'); return; }
+        const body = {
+            name: name,
+            description: $('gmDescr').value.trim(),
+            permissionIds: [...$('gmPerms').querySelectorAll('input:checked')].map(c => +c.value)
+        };
+        try {
+            if (editGroupId) await post(API + '/groups/' + editGroupId, body, 'PUT');
+            else await post(API + '/groups', body);
+            closeModals();
+            stat('✓ группа «' + name + '» сохранена — перезайдите пользователям, чьи права изменились');
+            loadAll();
+        } catch (e) { alert('Не сохранено: ' + e.message); }
+    }
+
+    async function delGroup(id) {
+        const g = groups.find(x => x.id === id);
+        if (!g) return;
+        if (!confirm('Удалить группу «' + g.name + '»?\nОна снимется со всех пользователей (вместе с её правами).')) return;
+        try {
+            await api(API + '/groups/' + id, {method: 'DELETE'});
+            stat('группа «' + g.name + '» удалена');
+            loadAll();
+        } catch (e) { stat(e.message, true); }
+    }
+
+    /* ---------- справочник прав ---------- */
+    function renderPerms() {
+        const el = $('perms');
+        if (!perms.length) { el.innerHTML = '<div class="mono">справочник пуст — прогоните rag_security.sql</div>'; return; }
+        let h = '<table class="tbl"><tr><th>право</th><th>контроллер</th><th>метод</th><th>url</th></tr>';
+        for (const p of perms) {
+            h += '<tr><td class="mono"><b>' + esc(p.name) + '</b></td>'
+                + '<td>' + esc(p.controllerName || '') + '</td>'
+                + '<td class="mono">' + esc(p.httpMethod || '') + '</td>'
+                + '<td class="mono">' + esc(p.urlPattern || '') + '</td></tr>';
+        }
+        el.innerHTML = h + '</table>';
+    }
+
+    /* ---------- вспомогательное ---------- */
+
+    /** Чекбоксы для модалок: value=id, подпись labelOf, подсказка titleOf. */
+    function checksHtml(items, selected, labelOf, titleOf) {
+        if (!items.length) return '<div class="mono" style="color:#999">список пуст</div>';
+        const sel = new Set(selected || []);
+        return items.map(i =>
+            '<label class="chk" title="' + titleOf(i) + '">'
+            + '<input type="checkbox" value="' + i.id + '"' + (sel.has(i.id) ? ' checked' : '') + '> '
+            + labelOf(i) + '</label>').join('');
+    }
+
+    function closeModals() {
+        document.querySelectorAll('.overlay').forEach(o => o.hidden = true);
+    }
+    /* закрытие модалок: Esc, клик по затемнению, кнопки data-close
+       (inline onclick в module-скрипте не видит closeModals — поэтому только привязка из JS) */
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModals(); });
+    document.querySelectorAll('.overlay').forEach(o =>
+        o.addEventListener('mousedown', e => { if (e.target === o) closeModals(); }));
+    document.querySelectorAll('button[data-close]').forEach(b => b.onclick = closeModals);
+
+    /* ---------- шапка ---------- */
+    async function renderMe() {
+        try {
+            const me = await fetch('/api/rag/me').then(r => r.ok ? r.json() : null);
+            if (!me) return;
+            window.ragMe = me;
+            $('whoami').textContent = 'Вы: ' + (String(me.fullName || '').trim() || me.accountName)
+                + ' (' + me.accountName + ') · права: ' + (me.permissions || []).join(', ');
+        } catch (e) { console.debug('me не получен: ', e); }
+    }
+
+    $('logout').onclick = async () => {
+        try { sessionStorage.setItem('ragLastLogin', window.ragMe?.accountName || ''); } catch (e) { /* noop */ }
+        await fetch('/logout', {method: 'POST'}).catch(() => {});
+        location.href = '/login.html';
+    };
+    $('btnBack').onclick = () => location.href = '/?adminPanel=1';
+    $('btnRefreshAll').onclick = loadAll;
+    $('btnRefreshPerms').onclick = loadAll;
+    $('btnAddUser').onclick = () => openUserModal(null);
+    $('btnAddGroup').onclick = () => openGroupModal(null);
+    $('umSave').onclick = saveUser;
+    $('gmSave').onclick = saveGroup;
+
+    renderMe();
+    loadAll();
+</script>
+</body></html>

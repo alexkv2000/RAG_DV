@@ -11,7 +11,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
-
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.access.AccessDeniedException;
 import java.util.Map;
 
 /**
@@ -24,6 +25,21 @@ public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
     private static final String ERROR = "error";
+
+    /** @PreAuthorize не пустил (второй слой после URL-правил). */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<Map<String, String>> forbidden(AccessDeniedException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of(ERROR, "нет прав для этой операции"));
+    }
+    /** Дубликат логина/email при создании пользователя, битая связь — 409, не 500. */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, String>> conflict(DataIntegrityViolationException e) {
+        log.warn("Конфликт данных: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of(ERROR, "конфликт данных (дубликат логина/email или нарушение связи): "
+                        + deepest(e)));
+    }
 
     /** Сбой внешнего сервиса на нашей стороне (LLM вернул 4xx/5xx, пустой ответ). */
     @ExceptionHandler(IllegalStateException.class)

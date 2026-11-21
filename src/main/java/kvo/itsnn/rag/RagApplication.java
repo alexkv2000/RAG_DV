@@ -9,5 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 @ConfigurationPropertiesScan
 public class RagApplication {
-    public static void main(String[] args) { SpringApplication.run(RagApplication.class, args); }
+    public static void main(String[] args) {
+        System.setProperty("java.naming.referral", "ignore"); // AD: не падать на referral-записях
+        SpringApplication.run(RagApplication.class, args); }
 }

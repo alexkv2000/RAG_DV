@@ -32,7 +32,15 @@
     #newChat{background:#fff;color:#555;border:1px solid var(--c-border)}
     #newChat:hover{background:#f5f5f5;border-color:var(--c-border-hover);color:#555}
     #newChat:active{background:#e8e8e8}
-
+    /* ===== учётная запись текущего пользователя ===== */
+    #topRight{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+    #topRight .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+    #whoami{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-3);
+        white-space:nowrap;max-width:340px;overflow:hidden}
+    #whoami[hidden]{display:none}
+    #whoami .nm{overflow:hidden;text-overflow:ellipsis}
+    #whoami .adm{background:var(--c-primary-light);color:#174ea6;font-weight:600;font-size:10px;
+        padding:1px 8px;border-radius:10px;flex:none}
     /* ===== поля ввода: рамка #d0d0d0, фокус — синий ореол ===== */
     input,select,textarea{font-family:inherit;font-size:13px;color:var(--c-text);
         padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--r);background:#fff;
@@ -191,13 +199,17 @@
     .delta-down{color:var(--c-err);font-weight:600}
 </style></head><body>
 <div id="top">
-    <h3>Чат по базе знаний DocsVision <span class="ver">v5.1</span></h3>
-    <div style="display:flex;gap:6px">
-        <button type="button" class="sm" id="delAnswers"
-                title="Удалить все ответы — останутся только вопросы. История для ИИ тоже чистится">🧹 Удалить все ответы</button>
-        <button type="button" class="sm" id="delQuestions"
-                title="Удалить все вопросы — останутся только ответы. История для ИИ тоже чистится">🧹 Удалить все вопросы</button>
-        <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
+    <h3>Чат по базе знаний DocsVision <span class="ver">v5.2</span></h3>
+    <div id="topRight">
+        <div class="btns">
+            <button type="button" class="sm" id="delAnswers"
+                    title="Удалить все ответы — останутся только вопросы. История для ИИ тоже чистится">🧹 Удалить все ответы</button>
+            <button type="button" class="sm" id="delQuestions"
+                    title="Удалить все вопросы — останутся только ответы. История для ИИ тоже чистится">🧹 Удалить все вопросы</button>
+            <button id="newChat" type="button" title="Забыть историю диалога и начать заново">⟲ Новый чат</button>
+            <button type="button" class="sm" id="logout">Выйти</button>
+        </div>
+        <span id="whoami" hidden title="Учётная запись загружается…"></span>
     </div>
 </div>
 
@@ -247,7 +259,6 @@
         </div>
         <div id="actOut" class="mono"></div>
     </div>
-
     <div class="acard">
         <div class="ahead"><b>Ночное окно индексации</b>
             <button type="button" class="sm" id="btnNightRefresh">⟳ Обновить</button></div>
@@ -294,6 +305,14 @@
             <button type="button" id="btnLlm" title="Ответ LLM может занять до пары минут">LLM</button>
         </div>
         <div id="selfOut" class="mono">Нажмите кнопку — результат появится здесь.</div>
+    </div>
+
+    <div class="acard" id="secCard" hidden>
+        <div class="ahead"><b>Управление доступом</b></div>
+        <div class="mono" style="font-size:11.5px;color:#888">Пользователи, группы и права — отдельная страница /useradmin (право edit:users или superAdmin).</div>
+        <div class="arow">
+            <button type="button" class="gray" id="btnSecOpen">👥 Пользователи и права</button>
+        </div>
     </div>
 
     <div class="acard">
@@ -376,7 +395,7 @@
 </div>
 
 <script type="module">
-    console.info('RAG UI v5.1 — eval качества поиска (golden-вопросы, recall, история прогонов)');
+    console.info('RAG UI v5.2 — eval качества поиска (golden-вопросы, recall, история прогонов)');
     /* crypto.randomUUID() есть только в secure context (https/localhost);
        на http://w17-051911:8080 его нет — скрипт падал на этой строке.
        Скрипт подключён как module: доступны top-level await и строгий режим. */
@@ -393,8 +412,54 @@
     localStorage.setItem('ragSid', sid);
     const box = document.getElementById('chat');
     const cls = document.getElementById('cls');
+    /* ---------- учётная запись текущего пользователя: GET /api/rag/me ---------- */
+    async function renderMe() {
+        const el = document.getElementById('whoami');
+        try {
+            const r = await fetch('/api/rag/me');
+            if (r.status === 401) { location.href = '/login.html'; return; }   // сессия умерла — на логин
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const me = await r.json();
+            window.ragMe = me;                       // logout покажет логин на странице входа
+            const login = String(me.accountName || '?');
+            const name = String(me.fullName || '').trim() || login;   // ФИО нет — показываем логин
+            el.textContent = '';                    // пересобираем: имя + метка «админ»
+            const nm = document.createElement('span');
+            nm.className = 'nm';
 
-    /* режим чата: 'rag' — по документам (embedding + Chroma), 'direct' — прямой диалог с LLM.
+            const rights = Array.isArray(me.permissions) ? me.permissions : [];
+            el.title = 'Логин: ' + login                              // детали — в подсказке при наведении
+                + (String(me.fullName || '').trim() ? '\nФИО: ' + String(me.fullName) : '')
+                + (me.email ? '\nE-mail: ' + me.email : '')
+                + (rights.length ? '\nПрава: ' + rights.join(', ') : '');
+            el.hidden = false;
+            nm.textContent = name;
+            el.appendChild(nm);
+            if (rights.includes('read:admin') || rights.includes('superAdmin')) {
+                const adm = document.createElement('span');
+                adm.className = 'adm';
+                adm.textContent = 'админ';
+                el.appendChild(adm);
+            }
+            const secCard = document.getElementById('secCard');
+            if (secCard && (rights.includes('edit:users') || rights.includes('superAdmin'))) {
+                secCard.hidden = false;
+                document.getElementById('btnSecOpen').onclick = () => location.href = '/useradmin';
+            }
+        } catch (e) {
+            console.warn('Учётная запись не получена (подпись скрыта): ', e);
+        }
+    }
+    renderMe();
+
+    /* выход: запоминаем логин для страницы входа, убиваем сессию */
+    document.getElementById('logout').onclick = async () => {
+        try { sessionStorage.setItem('ragLastLogin', window.ragMe?.accountName || ''); } catch (e) { /* noop */ }
+        await fetch('/logout', {method: 'POST'}).catch(() => {});
+        location.href = '/login.html';
+    };
+
+    /* Режим чата: 'rag' — по документам (embedding + Chroma), 'direct' — прямой диалог с LLM.
        Выбор сохраняется в localStorage; истории режимов раздельные (разные сервисы на бэкенде). */
     let chatMode = localStorage.getItem('chatMode') === 'direct' ? 'direct' : 'rag';
     const modeRag = document.getElementById('modeRag');
@@ -854,6 +919,7 @@
     /* единый вызов API: всегда JSON, ошибки бэкенда — в исключение */
     async function api(url, opts) {
         const r = await fetch(url, opts);
+        if (r.status === 401) { location.href = '/login.html'; throw new Error('требуется вход'); }
         let j = {};
         try {
             j = await r.json();
