@@ -2,6 +2,7 @@ package kvo.itsnn.rag.ask;
 
 import kvo.itsnn.rag.config.RagProperties;
 import kvo.itsnn.rag.llm.LlmClient;
+import kvo.itsnn.rag.security.UserOrgContext;
 import kvo.itsnn.rag.util.DocPatterns;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,11 +64,13 @@ public class DocSummaryService {
     private final JdbcTemplate jdbc;
     private final LlmClient llm;
     private volatile boolean warned;
+    private final UserOrgContext userOrgs;
 
-    public DocSummaryService(RagProperties props, JdbcTemplate jdbc, LlmClient llm) {
+    public DocSummaryService(RagProperties props, JdbcTemplate jdbc, LlmClient llm, UserOrgContext userOrgs) {
         this.props = props;
         this.jdbc = jdbc;
         this.llm = llm;
+        this.userOrgs = userOrgs;
         log.info("DocSummaryService: включён, первых фрагментов на файл={}", HEAD_CHUNKS);
     }
 
@@ -198,21 +201,37 @@ public class DocSummaryService {
                 UUID.fromString(f.documentGuid()));
     }
 
-    /** Файлы по коду в имени; копии одного файла (одно имя, разные file_id) не дублируем. */
+    /** Файлы по коду в имени; копии не дублируем; фильтр по ЮЛ — как в CompareService. */
     private List<FileHit> findFiles(String code, String classifier) {
         boolean byCls = classifier != null && !classifier.isBlank();
-        String sql = """
+        java.util.Set<String> orgLe = userOrgs.currentUserOrgs();
+
+        StringBuilder sql = new StringBuilder("""
                 SELECT c.file_name, c.file_id, c.document_guid
                 FROM dbo.rag_chunk c
                 JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid AND r.row_id = c.file_id
                 WHERE r.status = 'I' AND c.file_name LIKE ?
-                """ + (byCls ? " AND r.classifier = ?" : "") + " ORDER BY c.file_name";
+                """);
         List<Object> args = new ArrayList<>(List.of("%" + code + "%"));
-        if (byCls) args.add(classifier);
+        if (byCls) {
+            sql.append(" AND r.classifier = ?");
+            args.add(classifier);
+        }
+        if (orgLe != null) {
+            if (orgLe.isEmpty()) {
+                sql.append(" AND (r.org_le IS NULL OR r.org_le = '')");
+            } else {
+                sql.append(" AND (r.org_le IS NULL OR r.org_le = '' OR r.org_le IN (");
+                sql.append(String.join(",", java.util.Collections.nCopies(orgLe.size(), "?")));
+                sql.append("))");
+                args.addAll(orgLe);
+            }
+        }
+        sql.append(" ORDER BY c.file_name");
 
         List<FileHit> all = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        jdbc.query(sql, rs -> {
+        jdbc.query(sql.toString(), rs -> {
             String name = rs.getString(1);
             if (!seen.add(name.toLowerCase(Locale.ROOT))) return;
             all.add(new FileHit(name, rs.getString(2), rs.getString(3), DocPatterns.versionOf(name)));

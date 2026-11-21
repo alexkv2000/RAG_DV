@@ -12,9 +12,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.regex.Pattern;
 
 @Service
@@ -94,7 +94,7 @@ public class IngestService {
             chunks.insertEmbeddings(newIds, vectors, embedder.model());
             return newIds;
         });
-        publishVectors(oldIds, ref.guid(), ref.classifier(), ids, vectors);
+        publishVectors(oldIds, ref, ids, vectors);
         refs.markIndexed(ref.guid(), hash);
         log.info("Проиндексирован {} [{}] — {} чанков из {} файлов за {} мс",
                 ref.guid(), ref.classifier(), ids.size(), metas.size(),
@@ -181,25 +181,28 @@ public class IngestService {
     }
 
     /**
-     * Запись векторов в Chroma с метаданными документа; ошибка = внешняя система.
+     * Запись векторов в Chroma с метаданными документа (теперь + org_le).
+     * Ошибка = внешняя система → EmbeddingServiceException.
      */
-    private void publishVectors(List<Long> oldIds, UUID guid, String classifier,
+    private void publishVectors(List<Long> oldIds, DocumentRef ref,
                                 List<Long> ids, List<float[]> vectors) {
         try {
             index.removeChunks(oldIds);
             List<Map<String, String>> metas = new ArrayList<>(ids.size());
             for (int i = 0; i < ids.size(); i++) {
-                metas.add(Map.of("document_guid", guid.toString(),
-                        "classifier", classifier == null ? "" : classifier));
+                Map<String, String> meta = new HashMap<>();
+                meta.put("document_guid", ref.guid().toString());
+                meta.put("classifier", ref.classifier() == null ? "" : ref.classifier());
+                meta.put("org_le", ref.orgLe() == null ? "" : ref.orgLe());
+                metas.add(meta);
             }
             index.addAll(ids, vectors, metas);
         } catch (Exception e) {
-            // MSSQL уже переключился на новые chunk_id; старые удалены из MSSQL,
-            // их векторы в Chroma — сироты. Убираем best-effort; не вышло — вычистит ночная сверка.
             try {
                 index.removeChunks(oldIds);
             } catch (Exception sup) {
-                log.warn("{}: сиротные векторы не вычищены ({}) — ждём ночную сверку", guid, sup.getMessage());
+                log.warn("{}: сиротные векторы не вычищены ({}) — ждём ночную сверку",
+                        ref.guid(), sup.getMessage());
             }
             throw new EmbeddingServiceException("ChromaDB: " + e.getMessage(), e);
         }

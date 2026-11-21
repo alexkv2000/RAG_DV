@@ -136,4 +136,26 @@ public class UserAdminController {
             return "forward:/admin-users.html";   // src/main/resources/static
         }
     }
+
+    /* ---------- юридические лица ---------- */
+    /** Список всех ЮЛ группы из DocsVision (для выпадающего списка). */
+    @GetMapping("/orgs")
+    public List<String> orgs() {
+        return repo.findAllOrgs();
+    }
+    /** ЮЛ по каждой группе (для отображения в таблице групп). */
+    @GetMapping("/groups-orgs")
+    public Map<Long, List<String>> groupsOrgs() {
+        return repo.orgsByGroup();
+    }
+    public record GroupOrgsRequest(Set<String> orgLes) {}
+    /** Обновить список ЮЛ группы. Пустой список = группа без привязки к ЮЛ
+     *  (члены группы видят только общие документы). */
+    @PutMapping("/groups/{id}/orgs")
+    public Map<String, Object> updateGroupOrgs(@PathVariable long id,
+                                               @RequestBody GroupOrgsRequest req) {
+        repo.setGroupOrgs(id, req.orgLes() == null ? List.of() : List.copyOf(req.orgLes()));
+        return Map.of("result", "updated", "id", id,
+                "orgLes", req.orgLes() == null ? List.of() : req.orgLes());
+    }
 }

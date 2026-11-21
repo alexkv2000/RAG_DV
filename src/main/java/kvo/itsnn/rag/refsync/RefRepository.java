@@ -100,7 +100,7 @@ public class RefRepository {
     }
 
     /**
-     * Атомарный claim: N -> P.
+     * Атомарный claim: N -> P. Теперь с org_le (для записи в метаданные Chroma).
      */
     public List<DocumentRef> claimForIndexing(int limit) {
         String sql = """
@@ -113,14 +113,16 @@ public class RefRepository {
             UPDATE r
                SET r.status = 'P', r.claimed_at = SYSUTCDATETIME(),
                    r.retry_count = r.retry_count + 1, r.updated_at = SYSUTCDATETIME()
-            OUTPUT inserted.document_guid, inserted.classifier, inserted.retry_count
+            OUTPUT inserted.document_guid, inserted.classifier, inserted.org_le, inserted.retry_count
             FROM dbo.rag_document_ref r
             JOIN picked p ON p.document_guid = r.document_guid;
             """;
         return jdbc.query(sql, (rs, i) -> new DocumentRef(
                         UUID.fromString(rs.getString("document_guid")),
-                        rs.getString("classifier"), rs.getInt("retry_count")), limit)
-                .stream().distinct().toList();     // OUTPUT всё ещё по строкам — дедупим
+                        rs.getString("classifier"),
+                        rs.getString("org_le"),
+                        rs.getInt("retry_count")), limit)
+                .stream().distinct().toList();
     }
 
     public boolean sameHash(UUID guid, byte[] hash) {

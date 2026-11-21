@@ -4,6 +4,7 @@ import kvo.itsnn.rag.config.LlmProperties;
 import kvo.itsnn.rag.config.RagProperties;
 import kvo.itsnn.rag.ingest.Embedder;
 import kvo.itsnn.rag.llm.LlmClient;
+import kvo.itsnn.rag.security.UserOrgContext;
 import kvo.itsnn.rag.util.DocPatterns;
 import kvo.itsnn.rag.util.VecMath;
 import org.slf4j.Logger;
@@ -54,15 +55,16 @@ public class CompareService {
     private final JdbcTemplate jdbc;
     private final LlmClient llm;
     private final ComparePromptProvider prompts;   // промпт сравнения из rag_control
-
+    private final UserOrgContext userOrgs;
     public CompareService(LlmProperties cfg, RagProperties props, Embedder embedder,
-                          JdbcTemplate jdbc, LlmClient llm, ComparePromptProvider prompts) {
+                          JdbcTemplate jdbc, LlmClient llm, ComparePromptProvider prompts, UserOrgContext userOrgs) {
         this.cfg = cfg;
         this.props = props;
         this.embedder = embedder;
         this.jdbc = jdbc;
         this.llm = llm;
         this.prompts = prompts;
+        this.userOrgs = userOrgs;
         log.info("CompareService: enabled={}, фрагментов на версию={}",
                 cfg.compareEnabled(), cfg.compareChunksPerSide());
     }
@@ -194,33 +196,46 @@ public class CompareService {
     }
 
     /**
-     * Лучшие чанки одной версии: файлы, в чьём имени есть и код, и версия
-     * («6.0» не матчит «16.0»/«6.01» — DocPatterns.exactVersion). Копии одного файла
-     * (одно имя под разными file_id) не дублируем.
+     * Лучшие чанки одной версии; фильтрация по ЮЛ — как в ChromaVectorIndex.whereOf():
+     * userOrgs=null → без фильтра; иначе org_le IN (...) OR org_le IS NULL/пусто.
      */
     private List<ChunkRow> topChunks(String code, String version, String classifier, float[] q) {
         Pattern ver = DocPatterns.exactVersion(version);
         boolean byClassifier = classifier != null && !classifier.isBlank();
-        String sql = """
+        java.util.Set<String> orgLe = userOrgs.currentUserOrgs();
+
+        StringBuilder sql = new StringBuilder("""
                 SELECT c.document_guid, c.file_name, c.chunk_no, LEFT(c.content, ?) AS content,
                        c.file_id, e.embedding
                 FROM dbo.rag_chunk c
                 JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid AND r.row_id = c.file_id
                 JOIN dbo.rag_embedding e ON e.chunk_id = c.chunk_id AND e.model = ?
                 WHERE r.status = 'I' AND c.file_name LIKE ?
-                """ + (byClassifier ? " AND r.classifier = ?" : "");
-
+                """);
         List<Object> args = new ArrayList<>(List.of(MAX_CHUNK_CHARS, embedder.model(), "%" + code + "%"));
-        if (byClassifier) args.add(classifier);
+        if (byClassifier) {
+            sql.append(" AND r.classifier = ?");
+            args.add(classifier);
+        }
+        if (orgLe != null) {
+            if (orgLe.isEmpty()) {
+                sql.append(" AND (r.org_le IS NULL OR r.org_le = '')");
+            } else {
+                sql.append(" AND (r.org_le IS NULL OR r.org_le = '' OR r.org_le IN (");
+                sql.append(String.join(",", Collections.nCopies(orgLe.size(), "?")));
+                sql.append("))");
+                args.addAll(orgLe);
+            }
+        }
 
         List<ChunkRow> all = new ArrayList<>();
-        Map<String, String> fileOf = new HashMap<>();     // имя файла (lower) → file_id первого встреченного
-        jdbc.query(sql, rs -> {
+        Map<String, String> fileOf = new HashMap<>();
+        jdbc.query(sql.toString(), rs -> {
             String name = rs.getString("file_name");
-            if (name == null || !ver.matcher(name).find()) return;   // версия — в имени файла
+            if (name == null || !ver.matcher(name).find()) return;
             String fileId = rs.getString("file_id");
             String owner = fileOf.putIfAbsent(name.toLowerCase(Locale.ROOT), fileId);
-            if (owner != null && !owner.equals(fileId)) return;      // копия того же файла — мимо
+            if (owner != null && !owner.equals(fileId)) return;
             float[] v = VecMath.fromLittleEndian(rs.getBytes("embedding"));
             all.add(new ChunkRow(rs.getString("document_guid"), name, rs.getInt("chunk_no"),
                     VecMath.dot(q, v), rs.getString("content"), fileId));

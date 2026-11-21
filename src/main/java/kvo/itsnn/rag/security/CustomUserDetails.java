@@ -8,22 +8,30 @@ import java.util.Collection;
 import java.util.Set;
 
 /**
- * UserDetails с правами из БД RAG: строки прав («use:chat», «superAdmin» ...)
- * превращаются в GrantedAuthority для hasAuthority(...) в @PreAuthorize и SecurityFilterChain.
- * Пароль — заглушка: проверку пароля делает LDAP (BindAuthenticator).
+ * UserDetails с правами и ЮЛ из БД RAG.
+ * orgLe — множество юридических лиц, доступных пользователю
+ * (объединение всех org_le всех групп пользователя).
+ * Пароль — заглушка: проверку делает LDAP (BindAuthenticator).
  */
 public final class CustomUserDetails implements UserDetails {
 
     private final RagUser user;
     private final Set<String> permissions;
+    private final Set<String> orgLe;
 
-    public CustomUserDetails(RagUser user, Set<String> permissions) {
+    public CustomUserDetails(RagUser user, Set<String> permissions, Set<String> orgLe) {
         this.user = user;
         this.permissions = Set.copyOf(permissions);
+        this.orgLe = orgLe == null ? Set.of() : Set.copyOf(orgLe);
     }
 
     public RagUser getUser() {
         return user;
+    }
+
+    /** Доступные ЮЛ (может быть пустым — только общие документы). */
+    public Set<String> getOrgLe() {
+        return orgLe;
     }
 
     @Override
@@ -35,7 +43,7 @@ public final class CustomUserDetails implements UserDetails {
 
     @Override
     public String getPassword() {
-        return "{noop}password";   // аутентификация идёт через AD, пароль здесь не проверяется
+        return "{noop}password";
     }
 
     @Override

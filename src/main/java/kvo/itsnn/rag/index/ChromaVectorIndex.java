@@ -24,19 +24,15 @@ import java.util.function.Supplier;
 
 /**
  * Векторный индекс на ChromaDB (режим сервера, REST API v2).
- * MSSQL (rag_embedding) остаётся резервной копией векторов —
- * reload() пересинхронизирует Chroma из MSSQL со сносом коллекции
- * (иначе векторы chunk_id, которых нет в MSSQL, оставались бы навсегда).
+ * MSSQL (rag_embedding) — резервная копия векторов; reload() пересинхронизирует
+ * Chroma из MSSQL со сносом коллекции.
  *
- * Потокобезопасность: ReentrantReadWriteLock. reload() идёт под write-lock
- * минуты — пользовательские операции (search/addAll/removeChunks/size) берут
- * read-lock с таймаутом 5 с; не дождались (идёт пересборка) — EmbeddingServiceException,
- * который ApiExceptionHandler переводит в 503 «повторите позже». Иначе в окне
- * «delete-всё → заливка» поиск молча возвращал бы пустые выдачи («документов нет»).
+ * Метаданные чанка: document_guid, classifier, org_le (юридическое лицо документа).
+ * При поиске orgLe != null → where-фильтр Chroma:
+ *   org_le IN (доступные ЮЛ) OR org_le = "" (общие документы).
  *
- * Методы разложены на одноцелевые (search → doSearch → queryBody/hitsOf и т.п.):
- * лямбды readOp/withRecreate дают вложенность, и «всё в одном методе» переваливало
- * порог когнитивной сложности.
+ * Потокобезопасность: ReentrantReadWriteLock. reload() — write-lock;
+ * пользовательские операции — read-lock с таймаутом 5 с (далее 503).
  */
 @Component
 public class ChromaVectorIndex implements VectorIndex {
@@ -44,14 +40,11 @@ public class ChromaVectorIndex implements VectorIndex {
     private static final Logger log = LoggerFactory.getLogger(ChromaVectorIndex.class);
     private static final String API = "/api/v2/tenants/default_tenant/databases/default_database/collections";
 
-    /** Сколько пользовательская операция ждёт окончания reload, прежде чем уйти в 503. */
     private static final long OP_WAIT_MS = 5_000;
 
-    /** Единый префикс сообщений об ошибках Chroma (S1192: литерал не дублируется). */
     private static final String PREFIX = "ChromaDB: ";
     private static final String RELOADING = "идёт пересборка индекса (reload), повторите через минуту";
 
-    /** Действия REST API коллекции: и для uri(...), и как имя операции в readOp(...). */
     private static final String ACT_UPSERT = "upsert";
     private static final String ACT_DELETE = "delete";
     private static final String ACT_QUERY = "query";
@@ -64,27 +57,22 @@ public class ChromaVectorIndex implements VectorIndex {
     private final RestClient http;
     private volatile String collectionId;
 
-    /** fair — писатель не голодает читателями: после reload запросы поиска идут по очереди. */
     private final ReentrantReadWriteLock rw = new ReentrantReadWriteLock(true);
 
     public ChromaVectorIndex(JdbcTemplate jdbc, Embedder embedder, RagProperties props) {
         this.jdbc = jdbc;
         this.embedder = embedder;
         this.cfg = props.chroma();
-        // отдельная коллекция на модель эмбеддинга — аналог "WHERE e.model = ?" старого индекса
         this.collectionName = cfg.collection() + "_" + embedder.model().replaceAll("[^A-Za-z0-9._-]", "_");
         RestClient.Builder b = RestClient.builder()
                 .baseUrl(cfg.baseUrl().replaceAll("/+$", ""))
                 .requestFactory(requestFactory());
-        // defaultHeader (не headers(Consumer)): метод есть во всех версиях RestClient.Builder,
-        // включая Spring Boot 3.2; Consumer-вариант появился позже и в вашей сборке отсутствует
         if (cfg.token() != null && !cfg.token().isBlank())
             b.defaultHeader("Authorization", "Bearer " + cfg.token());
         this.http = b.build();
         log.info("{}url='{}', коллекция='{}'", PREFIX, cfg.baseUrl(), collectionName);
     }
 
-    /** Таймауты: без них зависший запрос к Chroma блокировал бы ingest и поиск неограниченно долго. */
     private static SimpleClientHttpRequestFactory requestFactory() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5_000);
@@ -93,7 +81,7 @@ public class ChromaVectorIndex implements VectorIndex {
     }
 
     @EventListener(ApplicationReadyEvent.class)
-    public void onStart() {                       // старт приложения не валится, если Chroma ещё не поднята
+    public void onStart() {
         try {
             ensureCollection();
         } catch (Exception e) {
@@ -101,10 +89,8 @@ public class ChromaVectorIndex implements VectorIndex {
         }
     }
 
-    /* ---------- блокировка: читатели с таймаутом, писатель — reload ---------- */
+    /* ---------- блокировка ---------- */
 
-    /** Read-lock с таймаутом вокруг пользовательской операции. Дедлоков нет: порядок захвата
-     *  всегда «rw → synchronized(this)» (ensureCollection/resetCollection), никогда наоборот. */
     private <T> T readOp(String what, Supplier<T> op) {
         Lock r = rw.readLock();
         try {
@@ -149,15 +135,11 @@ public class ChromaVectorIndex implements VectorIndex {
         return API + "/" + collectionId + "/" + action;
     }
 
-    /** 404 = коллекцию снёс reload соседнего инстанса или ручной DELETE,
-     *  а наш кэш collectionId указывает в пустоту: пересоздаём. Повтор операции
-     *  безопасен — upsert/delete/query идемпотентны. */
     private void recreateIfMissing(RestClientResponseException e) {
         if (e.getStatusCode().value() != 404 || collectionId == null) {
             throw e;
         }
-        log.warn("{}коллекция {} исчезла (снёс reload соседнего инстанса?) — пересоздаём",
-                PREFIX, collectionId);
+        log.warn("{}коллекция {} исчезла — пересоздаём", PREFIX, collectionId);
         collectionId = null;
         ensureCollection();
     }
@@ -188,8 +170,6 @@ public class ChromaVectorIndex implements VectorIndex {
         readOp(ACT_UPSERT, () -> doAddAll(chunkIds, vectors, metadatas));
     }
 
-    /** Сам upsert без блокировок — вызывается из addAll (под read-lock)
-     *  и из reload (поток уже держит write-lock, reentrancy не нужна). */
     private void doAddAll(List<Long> chunkIds, List<float[]> vectors, List<Map<String, String>> metadatas) {
         withRecreate(() -> {
             ensureCollection();
@@ -225,28 +205,71 @@ public class ChromaVectorIndex implements VectorIndex {
     /* ---------- VectorIndex: поиск ---------- */
 
     @Override
-    public List<Hit> search(float[] q, int topK, String classifier) {
-        return readOp(ACT_QUERY, () -> withRecreate(() -> doSearch(q, topK, classifier)));
+    public List<Hit> search(float[] q, int topK, String classifier, Set<String> orgLe) {
+        return readOp(ACT_QUERY, () -> withRecreate(() -> doSearch(q, topK, classifier, orgLe)));
     }
 
-    private List<Hit> doSearch(float[] q, int topK, String classifier) {
+    private List<Hit> doSearch(float[] q, int topK, String classifier, Set<String> orgLe) {
         ensureCollection();
         QueryResp resp = http.post().uri(uri(ACT_QUERY))
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(queryBody(q, topK, classifier))
+                .body(queryBody(q, topK, classifier, orgLe))
                 .retrieve().body(QueryResp.class);
         return hitsOf(resp);
     }
 
-    private static Map<String, Object> queryBody(float[] q, int topK, String classifier) {
+    /**
+     * Тело запроса /query с фильтрами.
+     * Where-логика:
+     *   classifier != null AND orgLe != null → $and [classifier $eq, $or [org_le $in, org_le $eq ""]]
+     *   только classifier                      → {classifier: {$eq: ...}}
+     *   только orgLe                           → $or [{org_le: $in}, {org_le: $eq ""}]
+     *   orgLe пустое множество                 → {org_le: {$eq: ""}} — только общие документы
+     */
+    private static Map<String, Object> queryBody(float[] q, int topK,
+                                                 String classifier, Set<String> orgLe) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("query_embeddings", List.of(q));
         body.put("n_results", topK);
         body.put("include", List.of("distances"));
-        if (classifier != null && !classifier.isBlank()) {
-            body.put("where", Map.of("classifier", Map.of("$eq", classifier)));
+
+        Map<String, Object> where = whereOf(classifier, orgLe);
+        if (where != null) {
+            body.put("where", where);
         }
         return body;
+    }
+
+    /**
+     * Where-фильтр ChromaDB:
+     *   classifier → {classifier: {$eq: X}}
+     *   orgLe != null (не пусто) → {$or: [{org_le: {$in: [...ЮЛ, ""]}}, ...]}
+     *   orgLe пусто → {org_le: {$eq: ""}}
+     *   оба → $and [...]
+     */
+    static Map<String, Object> whereOf(String classifier, Set<String> orgLe) {
+        Map<String, Object> clsCond = null;
+        if (classifier != null && !classifier.isBlank()) {
+            clsCond = Map.of("classifier", Map.of("$eq", classifier));
+        }
+
+        Map<String, Object> orgCond = null;
+        if (orgLe != null) {
+            if (orgLe.isEmpty()) {
+                // нет доступных ЮЛ — только общие документы
+                orgCond = Map.of("org_le", Map.of("$eq", ""));
+            } else {
+                // свои ЮЛ + общие (пустая строка)
+                List<String> values = new ArrayList<>(orgLe);
+                values.add("");    // общие документы всегда доступны
+                orgCond = Map.of("org_le", Map.of("$in", values));
+            }
+        }
+
+        if (clsCond != null && orgCond != null) {
+            return Map.of("$and", List.of(clsCond, orgCond));
+        }
+        return clsCond != null ? clsCond : orgCond;
     }
 
     private static List<Hit> hitsOf(QueryResp resp) {
@@ -266,7 +289,6 @@ public class ChromaVectorIndex implements VectorIndex {
         return lists == null || lists.isEmpty() ? null : lists.get(0);
     }
 
-    /** Косинус-похожесть из дистанции Chroma (1 − d); нет дистанции — NaN. */
     private static double scoreAt(List<Double> dist, int i) {
         return dist == null || i >= dist.size() ? Double.NaN : 1.0 - dist.get(i);
     }
@@ -282,7 +304,6 @@ public class ChromaVectorIndex implements VectorIndex {
             }));
             return n == null ? -1 : n;
         } catch (Exception e) {
-            // сюда попадает и таймаут read-лока во время reload — админка покажет «недоступна»
             log.warn("{}count: {}", PREFIX, e.getMessage());
             return -1;
         }
@@ -290,48 +311,31 @@ public class ChromaVectorIndex implements VectorIndex {
 
     /* ---------- reload ---------- */
 
-    /** Сброс перед пересинхронизацией. На этой сборке Chroma снос коллекции не работает
-     *  ни по id, ни по имени (curl: пустой ответ, коллекция жива), поэтому на него не
-     *  полагаемся: пробуем по имени, затем БЕЗУСЛОВНО вычищаем все записи существующей
-     *  коллекции — POST /delete без ids/where = «удалить всё» (тот же рабочий endpoint,
-     *  каким удаляются векторы по id). Если снос всё же сработал и коллекция пересоздана —
-     *  delete-всё будет no-op. */
     private synchronized void resetCollection() {
-        ensureCollection();               // разрешить id, даже если старт был при лежащей Chroma
-        dropCollectionByName();           // может не сработать — ниже подстраховка delete-всё
-        collectionId = null;              // id в любом случае протух (коллекцию могли снести)
-        ensureCollection();               // либо создалась новая, либо вернулась старая
+        ensureCollection();
+        dropCollectionByName();
+        collectionId = null;
+        ensureCollection();
         deleteAllRecords();
     }
 
-    /** Best-effort снос по имени: сбой не фатален — записи вычистит deleteAllRecords(). */
     private void dropCollectionByName() {
         try {
             http.delete().uri(API + "/name/" + collectionName).retrieve().toBodilessEntity();
         } catch (Exception e) {
-            log.warn("{}снос по имени не удался ({}) — работаем с живой коллекцией", PREFIX, e.getMessage());
+            log.warn("{}снос по имени не удался ({})", PREFIX, e.getMessage());
         }
     }
 
-    /** «Удалить все записи»: пустое тело POST /delete. */
     private void deleteAllRecords() {
         try {
             post(uri(ACT_DELETE), Map.of());
             log.info("{}записи коллекции '{}' вычищены", PREFIX, collectionName);
         } catch (Exception e) {
-            log.warn("{}очистка записей '{}' не удалась ({}) — продолжаем", PREFIX, collectionName, e.getMessage());
+            log.warn("{}очистка записей '{}' не удалась ({})", PREFIX, collectionName, e.getMessage());
         }
     }
 
-    /**
-     * Пересинхронизация Chroma из MSSQL — под write-lock: пока идёт заливка (минуты),
-     * пользовательский search либо ждёт до 5 с, либо получает 503 «идёт пересборка»,
-     * но НИКОГДА не возвращает пустую выдачу как «документов не нашлось».
-     * Снос/пересоздание коллекции атомарно закрыты synchronized resetCollection.
-     * На время заливки ingest должен стоять на паузе (см. RagScheduler/AdminController);
-     * если он всё же тикнет — addAll получит 503 после таймаута, IngestService вернёт
-     * заявку в очередь без штрафа (EmbeddingServiceException).
-     */
     @Override
     public void reload() {
         Lock w = rw.writeLock();
@@ -344,7 +348,7 @@ public class ChromaVectorIndex implements VectorIndex {
         }
     }
 
-    /** Заливка всех векторов из MSSQL. Вызывается ТОЛЬКО из reload — уже под write-lock. */
+    /** Заливка всех векторов из MSSQL — теперь читает и org_le из rag_document_ref. */
     private void upsertFromMssql() {
         final int FLUSH = 10_000;
         List<Long> ids = new ArrayList<>(FLUSH);
@@ -352,7 +356,7 @@ public class ChromaVectorIndex implements VectorIndex {
         List<Map<String, String>> metas = new ArrayList<>(FLUSH);
         long[] total = {0};
         jdbc.query("""
-                        SELECT e.chunk_id, e.embedding, c.document_guid, r.classifier
+                        SELECT e.chunk_id, e.embedding, c.document_guid, r.classifier, r.org_le
                         FROM dbo.rag_embedding e
                         JOIN dbo.rag_chunk c        ON c.chunk_id = e.chunk_id
                         JOIN dbo.rag_document_ref r ON r.document_guid = c.document_guid AND r.row_id = c.file_id
@@ -361,10 +365,10 @@ public class ChromaVectorIndex implements VectorIndex {
                 rs -> {
                     ids.add(rs.getLong(1));
                     vecs.add(VecMath.fromLittleEndian(rs.getBytes(2)));
-                    metas.add(metadataOf(rs.getString(3), rs.getString(4)));
+                    metas.add(metadataOf(rs.getString(3), rs.getString(4), rs.getString(5)));
                     if (ids.size() >= FLUSH) {
                         total[0] += ids.size();
-                        doAddAll(ids, vecs, metas);      // без read-лока: мы под write
+                        doAddAll(ids, vecs, metas);
                         ids.clear();
                         vecs.clear();
                         metas.clear();
@@ -377,14 +381,17 @@ public class ChromaVectorIndex implements VectorIndex {
         log.info("{}пересинхронизировано {} векторов из MSSQL", PREFIX, total[0]);
     }
 
-    //    важно: Chroma не принимает null в значениях метаданных
-    private static Map<String, String> metadataOf(String documentGuid, String classifier) {
-        return Map.of("document_guid", nz(documentGuid), "classifier", nz(classifier));
+    /** Метаданные чанка: document_guid, classifier, org_le. Chroma не принимает null. */
+    static Map<String, String> metadataOf(String documentGuid, String classifier, String orgLe) {
+        Map<String, String> m = new HashMap<>();
+        m.put("document_guid", nz(documentGuid));
+        m.put("classifier", nz(classifier));
+        m.put("org_le", nz(orgLe));
+        return m;
     }
 
     /* ---------- мелкие помощники ---------- */
 
-    /** Один POST c JSON-телом к Chroma — общая точка всех записывающих вызовов. */
     private void post(String uri, Map<String, Object> body) {
         http.post().uri(uri)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -392,7 +399,6 @@ public class ChromaVectorIndex implements VectorIndex {
                 .retrieve().toBodilessEntity();
     }
 
-    /** Диапазоны [from, to) пачками по rag.chroma.batch — общий цикл для upsert/delete. */
     private void inBatches(int size, Batch op) {
         for (int from = 0; from < size; from += cfg.batch()) {
             op.run(from, Math.min(size, from + cfg.batch()));

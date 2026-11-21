@@ -3,6 +3,7 @@ package kvo.itsnn.rag.web;
 import kvo.itsnn.rag.config.RagProperties;
 import kvo.itsnn.rag.index.VectorIndex;
 import kvo.itsnn.rag.ingest.Embedder;
+import kvo.itsnn.rag.security.UserOrgContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,13 +26,15 @@ public class SearchController {
     private final Embedder embedder;
     private final JdbcTemplate jdbc;
     private final RagProperties props;
+    private final UserOrgContext userOrgs;
 
     public SearchController(VectorIndex index, Embedder embedder,
-                            JdbcTemplate jdbc, RagProperties props) {
+                            JdbcTemplate jdbc, RagProperties props, UserOrgContext userOrgs) {
         this.index = index;
         this.embedder = embedder;
         this.jdbc = jdbc;
         this.props = props;
+        this.userOrgs = userOrgs;
     }
 
     public record SearchRequest(String query, int topK) {
@@ -50,7 +53,8 @@ public class SearchController {
 
         List<VectorIndex.Hit> candidates;
         try {
-            candidates = index.search(q, Math.min(CANDIDATE_LIMIT, topK * CANDIDATE_FACTOR));
+            java.util.Set<String> orgLe = userOrgs.currentUserOrgs();
+            candidates = index.search(q, Math.min(CANDIDATE_LIMIT, topK * CANDIDATE_FACTOR), null, orgLe);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(Map.of("error", "ChromaDB недоступна: " + e.getMessage()));

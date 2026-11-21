@@ -63,6 +63,61 @@ public class RagUserRepository {
                 """, String.class, accountName));
     }
 
+    /* ---------- юридические лица (org_le) ---------- */
+
+    /**
+     * Доступные ЮЛ пользователя — объединение всех org_le всех групп.
+     * Пример: пользователь в группах «ЮЛ А» и «ЮЛ Б» → {«А», «Б»}.
+     */
+    public Set<String> findOrgsByUsername(String accountName) {
+        return new LinkedHashSet<>(jdbc.queryForList("""
+                SELECT DISTINCT go.org_le
+                FROM dbo.rag_user u
+                JOIN dbo.rag_user_group ug ON ug.user_id = u.id
+                JOIN dbo.rag_group_org go  ON go.group_id = ug.group_id
+                WHERE u.account_name = ? AND u.is_active = 1
+                """, String.class, accountName));
+    }
+
+    /** Все ЮЛ, привязанные к группам (для админки). */
+    public Map<Long, List<String>> orgsByGroup() {
+        Map<Long, List<String>> m = new LinkedHashMap<>();
+        jdbc.query("""
+                SELECT group_id, org_le FROM dbo.rag_group_org ORDER BY group_id, org_le
+                """, (RowCallbackHandler) rs ->
+                m.computeIfAbsent(rs.getLong(1), k -> new ArrayList<>()).add(rs.getString(2)));
+        return m;
+    }
+
+    /** Справочник всех ЮЛ группы из DocsVision (для выпадающего списка в админке). */
+    public List<String> findAllOrgs() {
+        return jdbc.queryForList("""
+                SELECT DISTINCT Name
+                FROM dbo.[dvtable_{7473f07f-11ed-4762-9f1e-7ff10808ddd1}] (nolock)
+                WHERE Type = 0
+                  AND (NotAvailable IS NULL OR NotAvailable = 0)
+                  AND RowID <> 'EDF97159-CD48-4500-9D1B-8FA6AB3B001A'
+                ORDER BY Name
+                """, String.class);
+    }
+
+    /** Заменить список ЮЛ группы. */
+    @Transactional
+    public void setGroupOrgs(long groupId, List<String> orgLes) {
+        jdbc.update("DELETE FROM dbo.rag_group_org WHERE group_id = ?", groupId);
+        if (orgLes == null || orgLes.isEmpty()) return;
+        jdbc.batchUpdate("INSERT INTO dbo.rag_group_org (group_id, org_le) VALUES (?, ?)",
+                new BatchPreparedStatementSetter() {
+                    @Override
+                    public void setValues(PreparedStatement ps, int i) throws SQLException {
+                        ps.setLong(1, groupId);
+                        ps.setString(2, orgLes.get(i));
+                    }
+                    @Override
+                    public int getBatchSize() { return orgLes.size(); }
+                });
+    }
+
     public void userMustExist(long id) {
         Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM dbo.rag_user WHERE id = ?",
                 Integer.class, id);

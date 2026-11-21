@@ -6,6 +6,7 @@ import kvo.itsnn.rag.index.VectorIndex;
 import kvo.itsnn.rag.ingest.Embedder;
 import kvo.itsnn.rag.llm.LlmClient;
 import kvo.itsnn.rag.rerank.Reranker;
+import kvo.itsnn.rag.security.UserOrgContext;
 import kvo.itsnn.rag.util.DocPatterns;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,11 +41,13 @@ public class AskService {
     private final CompareService compare;         // D: сценарий «сравнение версий»
     private final DocSummaryService summary;      // E: сценарий «краткое содержание документа»
     private final Reranker reranker;              // стадия-2 поиска: кросс-энкодер после грубого отбора Chroma
+    private final UserOrgContext userOrgs;
 
     public AskService(LlmProperties cfg, RagProperties props, Embedder embedder,
                       VectorIndex index, JdbcTemplate jdbc, LlmClient llm,
                       SystemPromptProvider prompts, CompareService compare,
-                      DocSummaryService summary, Reranker reranker) {
+                      DocSummaryService summary, Reranker reranker,
+                      UserOrgContext userOrgs) {
         this.cfg = cfg;
         this.props = props;
         this.embedder = embedder;
@@ -55,6 +58,7 @@ public class AskService {
         this.compare = compare;
         this.summary = summary;
         this.reranker = reranker;
+        this.userOrgs = userOrgs;
         log.info("AskService: candidateChunks={}, contextChunks={}, queryPrefix='{}', rerank={}",
                 cfg.candidateChunks(), cfg.contextChunks(), props.embedding().queryPrefix(),
                 reranker.enabled() ? reranker.model() : "off");
@@ -139,8 +143,9 @@ public class AskService {
      * GUID для ссылки DocsVision берём прямо из rag_chunk.document_guid.
      */
     private List<ChunkHit> retrieve(String query, String classifier) {
+        java.util.Set<String> orgLe = userOrgs.currentUserOrgs();
         float[] q = embedder.embedAll(List.of(props.embedding().queryPrefix() + query)).get(0);
-        List<VectorIndex.Hit> candidates = index.search(q, cfg.candidateChunks(), classifier);
+        List<VectorIndex.Hit> candidates = index.search(q, cfg.candidateChunks(), classifier, orgLe);
         if (candidates.isEmpty()) return List.of();
         candidates.sort(Comparator.comparingDouble(VectorIndex.Hit::score).reversed());
 
@@ -148,7 +153,7 @@ public class AskService {
         candidates.forEach(h -> scoreOf.put(h.chunkId(), h.score()));
 
         String in = String.join(",", Collections.nCopies(candidates.size(), "?"));
-        List<ChunkHit> ordered = new ArrayList<>(candidates.size());   // effectively final: захватывается лямбдой ниже
+        List<ChunkHit> ordered = new ArrayList<>(candidates.size());
         jdbc.query("SELECT chunk_id, document_guid, file_name, chunk_no, content, file_id " +
                         "FROM dbo.rag_chunk WHERE chunk_id IN (" + in + ")",
                 rs -> {
@@ -160,15 +165,15 @@ public class AskService {
                     }
                 },
                 candidates.stream().map(VectorIndex.Hit::chunkId).toArray());
-        log.info("retrieve: строк из MSSQL={}", ordered.size());
-        ordered.sort(Comparator.comparingDouble(ChunkHit::score).reversed());   // порядок Chroma, а не SQL
-        // стадия-2: реранк возвращает НОВЫЙ список, ссылку ordered не трогаем — лямбда выше остаётся валидной
+        log.info("retrieve: строк из MSSQL={} (orgLe={})", ordered.size(),
+                orgLe == null ? "без фильтра" : orgLe.size() + " ЮЛ");
+        ordered.sort(Comparator.comparingDouble(ChunkHit::score).reversed());
         List<ChunkHit> reranked = rerank(query, ordered);
         List<ChunkHit> out = new ArrayList<>(cfg.contextChunks());
-        Map<String, Integer> perDoc = new HashMap<>();          // B: до MAX_CHUNKS_PER_DOC чанков на документ
+        Map<String, Integer> perDoc = new HashMap<>();
         int cap = DocPatterns.docCode(query) != null
-                ? cfg.contextChunks()      // 10 — вопрос про конкретный документ
-                : MAX_CHUNKS_PER_DOC;      // 3  — обычный семантический вопрос
+                ? cfg.contextChunks()
+                : MAX_CHUNKS_PER_DOC;
         for (ChunkHit h : reranked) {
             int n = perDoc.merge(h.documentGuid(), 1, Integer::sum);
             if (n <= cap) out.add(h);

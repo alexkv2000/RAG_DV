@@ -1,0 +1,534 @@
+USE [GAZ]
+GO
+--Таблицы, Процедуры и Функция--
+-- ═══ 1. Таблица привилегированных пользователей ═══
+CREATE TABLE dbo.rag_full_access_users
+(
+    domain_login  nvarchar(128)  NOT NULL,
+    display_name  nvarchar(256)  NULL,
+    granted_at    datetime       NOT NULL CONSTRAINT DF_rag_fau_granted DEFAULT GETDATE(),
+    granted_by    nvarchar(128)  NULL,
+    is_active     bit            NOT NULL CONSTRAINT DF_rag_fau_active DEFAULT 1,
+    CONSTRAINT PK_rag_full_access_users PRIMARY KEY CLUSTERED (domain_login)
+);
+GO
+
+
+-- ═══ rag_eval_run ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_eval_run](
+	[run_id] [int] IDENTITY(1,1) NOT NULL,
+	[at] [datetime2](7) NOT NULL,
+	[label] [nvarchar](200) NULL,
+	[questions] [int] NOT NULL,
+	[expected] [int] NOT NULL,
+	[found] [int] NOT NULL,
+	[recall] [float] NOT NULL,
+	[full_pass] [int] NOT NULL,
+	[ms] [bigint] NOT NULL,
+	[details] [nvarchar](max) NULL,
+PRIMARY KEY CLUSTERED
+(
+	[run_id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM] TEXTIMAGE_ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_eval_run] ADD  DEFAULT (sysutcdatetime()) FOR [at]
+GO
+
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_eval_question](
+	[question_id] [int] IDENTITY(1,1) NOT NULL,
+	[question] [nvarchar](max) NOT NULL,
+	[classifier] [nvarchar](200) NULL,
+	[expect_files] [nvarchar](max) NOT NULL,
+	[expect_must] [nvarchar](max) NULL,
+	[note] [nvarchar](500) NULL,
+	[enabled] [bit] NOT NULL,
+	[created_at] [datetime2](7) NOT NULL,
+PRIMARY KEY CLUSTERED
+(
+	[question_id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM] TEXTIMAGE_ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_eval_question] ADD  DEFAULT ((1)) FOR [enabled]
+GO
+
+ALTER TABLE [dbo].[rag_eval_question] ADD  DEFAULT (sysutcdatetime()) FOR [created_at]
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_embedding](
+	[chunk_id] [bigint] NOT NULL,
+	[model] [varchar](64) NOT NULL,
+	[dim] [smallint] NOT NULL,
+	[embedding] [varbinary](max) NOT NULL,
+	[created_at] [datetime2](3) NOT NULL,
+ CONSTRAINT [PK_rag_embedding] PRIMARY KEY CLUSTERED
+(
+	[chunk_id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM] TEXTIMAGE_ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_embedding] ADD  DEFAULT (sysutcdatetime()) FOR [created_at]
+GO
+
+ALTER TABLE [dbo].[rag_embedding]  WITH CHECK ADD FOREIGN KEY([chunk_id])
+REFERENCES [dbo].[rag_chunk] ([chunk_id])
+ON DELETE CASCADE
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_document_ref](
+	[document_guid] [uniqueidentifier] NOT NULL,
+	[doc_name] [nvarchar](512) NULL,
+	[doc_number] [nvarchar](128) NULL,
+	[project_number] [nvarchar](128) NULL,
+	[numerator_name] [nvarchar](128) NULL,
+	[classifier] [nvarchar](1024) NULL,
+	[kind] [nvarchar](128) NULL,
+	[is_deleted] [bit] NOT NULL,
+	[status] [char](1) NOT NULL,
+	[version] [int] NOT NULL,
+	[src_created_at] [datetime2](3) NULL,
+	[src_modified_at] [datetime2](3) NULL,
+	[file_count] [int] NULL,
+	[file_sig] [int] NULL,
+	[sync_at] [datetime2](3) NOT NULL,
+	[claimed_at] [datetime2](3) NULL,
+	[indexed_at] [datetime2](3) NULL,
+	[content_hash] [binary](32) NULL,
+	[error_msg] [nvarchar](2048) NULL,
+	[retry_count] [int] NOT NULL,
+	[updated_at] [datetime2](3) NOT NULL,
+	[row_id] [uniqueidentifier] NOT NULL,
+	[org_le] [nvarchar](255) NULL,
+ CONSTRAINT [PK_rag_document_ref] PRIMARY KEY CLUSTERED
+(
+	[document_guid] ASC,
+	[row_id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_document_ref] ADD  DEFAULT ((0)) FOR [is_deleted]
+GO
+
+ALTER TABLE [dbo].[rag_document_ref] ADD  DEFAULT ('N') FOR [status]
+GO
+
+ALTER TABLE [dbo].[rag_document_ref] ADD  DEFAULT ((1)) FOR [version]
+GO
+
+ALTER TABLE [dbo].[rag_document_ref] ADD  DEFAULT (sysutcdatetime()) FOR [sync_at]
+GO
+
+ALTER TABLE [dbo].[rag_document_ref] ADD  DEFAULT ((0)) FOR [retry_count]
+GO
+
+ALTER TABLE [dbo].[rag_document_ref] ADD  DEFAULT (sysutcdatetime()) FOR [updated_at]
+GO
+
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_control](
+	[ctrl_key] [varchar](30) NOT NULL,
+	[ctrl_value] [nvarchar](max) NOT NULL,
+PRIMARY KEY CLUSTERED
+(
+	[ctrl_key] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM] TEXTIMAGE_ON [SYSTEM]
+GO
+-- ═══  ═══
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_chunk](
+	[chunk_id] [bigint] IDENTITY(1,1) NOT NULL,
+	[document_guid] [uniqueidentifier] NOT NULL,
+	[chunk_no] [int] NOT NULL,
+	[file_id] [uniqueidentifier] NOT NULL,
+	[file_name] [nvarchar](256) NULL,
+	[content] [nvarchar](max) NOT NULL,
+	[content_hash] [binary](32) NOT NULL,
+ CONSTRAINT [PK_rag_chunk] PRIMARY KEY CLUSTERED
+(
+	[chunk_id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM],
+ CONSTRAINT [UQ_rag_chunk] UNIQUE NONCLUSTERED
+(
+	[document_guid] ASC,
+	[chunk_no] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM] TEXTIMAGE_ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_chunk]  WITH CHECK ADD  CONSTRAINT [FK_rag_chunk_document_file] FOREIGN KEY([document_guid], [file_id])
+REFERENCES [dbo].[rag_document_ref] ([document_guid], [row_id])
+ON DELETE CASCADE
+GO
+
+ALTER TABLE [dbo].[rag_chunk] CHECK CONSTRAINT [FK_rag_chunk_document_file]
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_group](
+	[id] [bigint] IDENTITY(1,1) NOT NULL,
+	[name] [nvarchar](128) NOT NULL,
+	[description] [nvarchar](512) NULL,
+ CONSTRAINT [PK_rag_group] PRIMARY KEY CLUSTERED
+(
+	[id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM],
+UNIQUE NONCLUSTERED
+(
+	[name] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM]
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_group_org](
+	[group_id] [bigint] NOT NULL,
+	[org_le] [nvarchar](255) NOT NULL,
+ CONSTRAINT [PK_rag_group_org] PRIMARY KEY CLUSTERED
+(
+	[group_id] ASC,
+	[org_le] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_group_org]  WITH CHECK ADD  CONSTRAINT [FK_rag_group_org_group] FOREIGN KEY([group_id])
+REFERENCES [dbo].[rag_group] ([id])
+GO
+
+ALTER TABLE [dbo].[rag_group_org] CHECK CONSTRAINT [FK_rag_group_org_group]
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_group_permission](
+	[group_id] [bigint] NOT NULL,
+	[permission_id] [bigint] NOT NULL,
+ CONSTRAINT [PK_rag_group_permission] PRIMARY KEY CLUSTERED
+(
+	[group_id] ASC,
+	[permission_id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_group_permission]  WITH CHECK ADD  CONSTRAINT [FK_rag_gp_group] FOREIGN KEY([group_id])
+REFERENCES [dbo].[rag_group] ([id])
+GO
+
+ALTER TABLE [dbo].[rag_group_permission] CHECK CONSTRAINT [FK_rag_gp_group]
+GO
+
+ALTER TABLE [dbo].[rag_group_permission]  WITH CHECK ADD  CONSTRAINT [FK_rag_gp_perm] FOREIGN KEY([permission_id])
+REFERENCES [dbo].[rag_permission] ([id])
+GO
+
+ALTER TABLE [dbo].[rag_group_permission] CHECK CONSTRAINT [FK_rag_gp_perm]
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_permission](
+	[id] [bigint] IDENTITY(1,1) NOT NULL,
+	[name] [nvarchar](128) NOT NULL,
+	[controller_name] [nvarchar](128) NULL,
+	[http_method] [nvarchar](16) NULL,
+	[url_pattern] [nvarchar](255) NULL,
+ CONSTRAINT [PK_rag_permission] PRIMARY KEY CLUSTERED
+(
+	[id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM],
+UNIQUE NONCLUSTERED
+(
+	[name] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM]
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_user](
+	[id] [bigint] IDENTITY(1,1) NOT NULL,
+	[full_name] [nvarchar](255) NULL,
+	[account_name] [nvarchar](128) NOT NULL,
+	[email] [nvarchar](255) NULL,
+	[is_active] [bit] NOT NULL,
+ CONSTRAINT [PK_rag_user] PRIMARY KEY CLUSTERED
+(
+	[id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM],
+UNIQUE NONCLUSTERED
+(
+	[account_name] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_user] ADD  CONSTRAINT [DF_rag_user_active]  DEFAULT ((1)) FOR [is_active]
+GO
+-- ═══  ═══
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[rag_user_group](
+	[user_id] [bigint] NOT NULL,
+	[group_id] [bigint] NOT NULL,
+ CONSTRAINT [PK_rag_user_group] PRIMARY KEY CLUSTERED
+(
+	[user_id] ASC,
+	[group_id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [SYSTEM]
+) ON [SYSTEM]
+GO
+
+ALTER TABLE [dbo].[rag_user_group]  WITH CHECK ADD  CONSTRAINT [FK_rag_user_group_group] FOREIGN KEY([group_id])
+REFERENCES [dbo].[rag_group] ([id])
+GO
+
+ALTER TABLE [dbo].[rag_user_group] CHECK CONSTRAINT [FK_rag_user_group_group]
+GO
+
+ALTER TABLE [dbo].[rag_user_group]  WITH CHECK ADD  CONSTRAINT [FK_rag_user_group_user] FOREIGN KEY([user_id])
+REFERENCES [dbo].[rag_user] ([id])
+GO
+
+ALTER TABLE [dbo].[rag_user_group] CHECK CONSTRAINT [FK_rag_user_group_user]
+GO
+
+-- ═══ 2. Функция доступа ═══
+CREATE OR ALTER FUNCTION dbo.fn_rag_has_full_access (@login nvarchar(128))
+RETURNS bit
+WITH SCHEMABINDING
+AS
+BEGIN
+    RETURN CASE WHEN EXISTS
+        (SELECT 1 FROM dbo.rag_full_access_users
+         WHERE domain_login = LOWER(@login) AND is_active = 1)
+    THEN 1 ELSE 0 END;
+END
+GO
+
+-- ═══ 3. Процедура выборки (document_id убран — идентификатор document_guid) ═══
+CREATE OR ALTER PROCEDURE dbo.rag_get_visible_documents
+    @user_login  nvarchar(128),
+    @user_org_le nvarchar(255) = NULL,
+    @search      nvarchar(400) = NULL,
+    @only_kind   nvarchar(50)  = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @full bit = dbo.fn_rag_has_full_access(@user_login);  -- один раз!
+
+    SELECT
+        r.document_guid,
+        r.doc_name,
+        r.doc_number,
+        r.project_number,
+        r.org_le,
+        r.classifier,
+        r.kind,
+        r.status,
+        r.indexed_at,
+        CASE WHEN @full = 1 AND r.org_le IS NOT NULL
+                  AND r.org_le <> ISNULL(@user_org_le, N'~~~')
+             THEN 1 ELSE 0 END AS is_cross_le_access
+    FROM dbo.rag_document_ref r
+    WHERE r.is_deleted = 0
+      AND (@only_kind IS NULL OR r.classifier = @only_kind)
+      -- ═══ контроль доступа ═══
+      AND ( @full = 1
+            OR r.org_le IS NULL
+            OR (@user_org_le IS NOT NULL AND r.org_le = @user_org_le) )
+      -- ═══ поиск ═══
+      AND ( @search IS NULL
+            OR r.doc_name   LIKE '%' + @search + '%'
+            OR r.doc_number LIKE '%' + @search + '%' )
+    ORDER BY r.src_modified_at DESC;
+END
+GO
+
+-- ═══ 3.2 Синхронизауия ОРД  ═══
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE OR ALTER PROCEDURE [dbo].[rag_sync_ord_sto]
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @dt  datetime = GETDATE();
+    DECLARE @ins int;
+    DECLARE @upd int;
+
+    IF OBJECT_ID('tempdb..#rag_src') IS NOT NULL DROP TABLE #rag_src;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- ── Шаг 1: материализуем выборку во временную таблицу ──────────────
+        ;WITH raw AS
+        (
+            SELECT
+                doc_main.InstanceID    AS document_guid,
+                v_files.FileID         AS row_id,
+                doc_main.Name          AS doc_name,
+                doc_main.Number        AS doc_number,
+                doc_main.ProjectNumber AS project_number,
+                doc_main.NumeratorName AS numerator_name,
+                TypeDocRow.Name        AS kind,
+                le.Name                AS org_le,
+                dates.CreationDateTime AS src_created_at,
+                dates.ChangeDateTime   AS src_modified_at,
+                ROW_NUMBER() OVER (PARTITION BY doc_main.InstanceID, v_files.FileID
+                                   ORDER BY (SELECT NULL)) AS rn,
+                COUNT(*) OVER (PARTITION BY doc_main.InstanceID) AS file_count
+            FROM dbo.[dvtable_{91b2c5f7-9324-4cef-9afe-a457c8310f06}] doc_sys WITH (NOLOCK)
+            INNER JOIN dbo.[dvtable_{30eb9b87-822b-4753-9a50-a1825dca1b74}] doc_main WITH (NOLOCK)
+                ON doc_sys.InstanceID = doc_main.InstanceID
+            INNER JOIN [dvtable_{1B1A44FB-1FB1-4876-83AA-95AD38907E24}] TypeDocRow WITH (NOLOCK)
+                ON doc_main.Type = TypeDocRow.RowID
+            LEFT JOIN dbo.[dvtable_{7473f07f-11ed-4762-9f1e-7ff10808ddd1}] le WITH (NOLOCK)
+                ON le.RowID = doc_main.LegalEntity
+            INNER JOIN dbo.[dvsys_instances_date] dates WITH (NOLOCK)
+                ON dates.InstanceID = doc_sys.InstanceID
+            INNER JOIN dbo.[dvtable_{521B4477-DD10-4F57-A453-09C70ADB7799}] stat WITH (NOLOCK)
+                ON stat.RowID = doc_sys.State
+            INNER JOIN dbo.[dvtable_{DA37CA71-A977-48E9-A4FD-A2B30479E824}] state_local WITH (NOLOCK)
+                ON state_local.ParentRowID = stat.RowID AND state_local.LocaleID = 1049
+            INNER JOIN [dbo].[dvtable_{a6fa8baf-2ea4-4071-aa3e-5c4e71646a90}] doc_files WITH (NOLOCK)
+                ON doc_files.InstanceID = doc_main.InstanceID
+            INNER JOIN [dbo].[dvtable_{f831372e-8a76-4abc-af15-d86dc5ffbe12}] v_files WITH (NOLOCK)
+                ON v_files.InstanceID = doc_files.FileId
+            INNER JOIN dbo.[dvsys_files] files WITH (NOLOCK)
+                ON files.FileID = v_files.FileID
+            INNER JOIN dbo.[dvsys_binaries] file_binaries WITH (NOLOCK)
+                ON file_binaries.ID = files.BinaryID
+            WHERE doc_sys.Kind = 'D91AE4FB-B782-43C6-9980-E490EF21E3A9'
+              AND doc_main.Name LIKE '%СТО №%'
+              AND state_local.Name IN ('В архиве', 'Зарегистрирован', 'Исполнен')
+        )
+        SELECT
+            document_guid, row_id, doc_name, doc_number, project_number,
+            numerator_name, kind, org_le, src_created_at, src_modified_at, file_count
+        INTO #rag_src
+        FROM raw
+        WHERE rn = 1;
+
+        -- ── Шаг 2: INSERT новых записей ────────────────────────────────────
+        INSERT INTO dbo.rag_document_ref
+            (document_guid, row_id, doc_name, doc_number, project_number, numerator_name,
+             org_le,
+             classifier, kind, is_deleted, status, version,
+             src_created_at, src_modified_at, file_count, file_sig,
+             sync_at, claimed_at, indexed_at, content_hash, error_msg, retry_count, updated_at)
+        SELECT
+            s.document_guid, s.row_id, s.doc_name, s.doc_number, s.project_number, s.numerator_name,
+            s.org_le,
+            'СТО', s.kind, 0, 'N', 1,
+            s.src_created_at, s.src_modified_at, s.file_count, NULL,
+            @dt, NULL, NULL, NULL, NULL, 0, @dt
+        FROM #rag_src s
+        WHERE NOT EXISTS
+        (
+            SELECT 1
+            FROM dbo.rag_document_ref r WITH (UPDLOCK, HOLDLOCK)
+            WHERE r.document_guid = s.document_guid
+              AND r.row_id = s.row_id
+        );
+
+        SET @ins = @@ROWCOUNT;
+
+        -- ── Шаг 3: дозаполнить org_le для уже существующих записей ──────────
+        UPDATE r
+           SET r.org_le = s.org_le,
+               r.updated_at = @dt
+        FROM dbo.rag_document_ref r
+        INNER JOIN #rag_src s
+            ON  r.document_guid = s.document_guid
+            AND r.row_id = s.row_id
+        WHERE r.org_le IS NULL
+          AND s.org_le IS NOT NULL;
+
+        SET @upd = @@ROWCOUNT;
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK;
+        THROW;
+    END CATCH;
+
+    DROP TABLE #rag_src;
+
+    -- счётчик (виден при ручном запуске и пишется в историю задания Agent)
+    RAISERROR('RAG ОРД СТО: вставлено %d строк, org_le обновлено %d строк', 0, 1, @ins, @upd) WITH NOWAIT;
+END
+GO

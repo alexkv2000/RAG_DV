@@ -8,9 +8,8 @@ import org.springframework.stereotype.Service;
 import java.util.Set;
 
 /**
- * Аналог CustomUserDetailsService из ProtocolMenagment: LDAP проверил пароль в AD,
- * здесь достаём пользователя и его права из локальной БД RAG.
- * Пользователя нет в dbo.rag_user → логин не пройдёт (добавьте его в админке/скриптом).
+ * LDAP проверил пароль в AD; здесь достаём пользователя, его права и ЮЛ
+ * из локальной БД RAG (dbo.rag_user + rag_group + rag_group_org).
  */
 @Service
 public class RagUserDetailsService implements UserDetailsService {
@@ -24,8 +23,10 @@ public class RagUserDetailsService implements UserDetailsService {
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         RagUser user = users.findByAccountName(username)
-                .orElseThrow(() -> new UsernameNotFoundException("Пользователь не найден в RAG: " + username));
+                .orElseThrow(() -> new UsernameNotFoundException(
+                        "Пользователь не найден в RAG: " + username));
         Set<String> permissions = users.findPermissionsByUsername(username);
-        return new CustomUserDetails(user, permissions);
+        Set<String> orgLe = users.findOrgsByUsername(username);
+        return new CustomUserDetails(user, permissions, orgLe);
     }
 }
