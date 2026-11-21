@@ -400,7 +400,7 @@
     document.querySelectorAll('button[data-close]').forEach(b => b.onclick = closeModals);
 
     /* ---------- шапка ---------- */
-    aasync function renderMe() {
+    async function renderMe() {
         try {
             const r = await fetch('/api/rag/me');
             const me = r.ok ? await r.json() : null;
@@ -417,7 +417,7 @@
         await fetch('/logout', {method: 'POST'}).catch(() => {});
         location.href = '/login.html';
     };
-    $('btnBack').onclick = () => location.href = '/?adminPanel=1';
+    $('btnBack').onclick = () => location.href = '/';
     $('btnRefreshAll').onclick = loadAll;
     $('btnRefreshPerms').onclick = loadAll;
     $('btnAddUser').onclick = () => openUserModal(null);

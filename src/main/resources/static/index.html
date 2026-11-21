@@ -199,7 +199,7 @@
     .delta-down{color:var(--c-err);font-weight:600}
 </style></head><body>
 <div id="top">
-    <h3>Чат по базе знаний DocsVision <span class="ver">v5.2</span></h3>
+    <h3>Чат по базе знаний DocsVision <span class="ver">v5.3</span></h3>
     <div id="topRight">
         <div class="btns">
             <button type="button" class="sm" id="delAnswers"
@@ -213,7 +213,9 @@
     </div>
 </div>
 
-<div id="tabs">
+<!-- полоса вкладок скрыта до ответа /api/rag/me: владельцам edit:admin/superAdmin
+     разворачивается из renderMe(), остальные видят только чат (раньше — ?adminPanel=1) -->
+<div id="tabs" hidden>
     <button type="button" class="tab on" id="tabChat">💬 Чат</button>
     <button type="button" class="tab" id="tabAdmin">🛠 Админ-панель</button>
     <button type="button" class="tab" id="tabPrompts">📝 Промты</button>
@@ -395,7 +397,7 @@
 </div>
 
 <script type="module">
-    console.info('RAG UI v5.2 — eval качества поиска (golden-вопросы, recall, история прогонов)');
+    console.info('RAG UI v5.3 — вкладки «Админ-панель»/«Промты» по правам пользователя (/api/rag/me), а не по ?adminPanel=1');
     /* crypto.randomUUID() есть только в secure context (https/localhost);
        на http://w17-051911:8080 его нет — скрипт падал на этой строке.
        Скрипт подключён как module: доступны top-level await и строгий режим. */
@@ -436,7 +438,8 @@
             el.hidden = false;
             nm.textContent = name;
             el.appendChild(nm);
-            if (rights.includes('read:admin') || rights.includes('superAdmin')) {
+            if (rights.includes('read:admin') || rights.includes('edit:admin')
+                || rights.includes('superAdmin')) {
                 const adm = document.createElement('span');
                 adm.className = 'adm';
                 adm.textContent = 'админ';
@@ -447,6 +450,9 @@
                 secCard.hidden = false;
                 document.getElementById('btnSecOpen').onclick = () => location.href = '/useradmin';
             }
+            /* полоса вкладок Чат/Админ/Промты — по правам (dbo.rag_permission), не по адресу */
+            isAdmin = ADMIN_TAB_RIGHTS.some(r => rights.includes(r));
+            document.getElementById('tabs').hidden = !isAdmin;
         } catch (e) {
             console.warn('Учётная запись не получена (подпись скрыта): ', e);
         }
@@ -568,16 +574,19 @@
     modeDirect.onclick = () => { chatMode = 'direct'; applyChatMode(); };
     applyChatMode();
 
-    /* вкладки «Админ» и «Промты» видны только при adminPanel=1 в адресе страницы:
-       http://host/            → чистый чат, полосы вкладок нет вовсе
-       http://host/?adminPanel=1  (или ...&adminPanel=1) → вкладки Чат/Админ/Промты */
-    const isAdmin = new URLSearchParams(location.search).get('adminPanel') === '1';
-    if (!isAdmin) document.getElementById('tabs').hidden = true;
+    /* Вкладки «Админ-панель»/«Промты» видны по ПРАВАМ пользователя (dbo.rag_permission
+       через GET /api/rag/me), а не по адресу: edit:admin или superAdmin разворачивает
+       полосу вкладок, остальные видят только чат.
+       isAdmin=false, пока «кто я» не ответил: полоса скрыта в HTML (hidden) и не мигает.
+       Скрытие — косметика: API и так закрыт правами в SecurityConfig (403 без прав).
+       Нужен read-only просмотр — добавьте 'read:admin' в ADMIN_TAB_RIGHTS. */
+    const ADMIN_TAB_RIGHTS = ['edit:admin', 'superAdmin'];
+    let isAdmin = false;
 
     document.getElementById('newChat').onclick = () => {
         if (!confirm('Начать новый диалог? Текущая история будет забыта.')) return;
         localStorage.removeItem('ragSid');
-        location.reload();          // перезагрузка сохраняет adminPanel=1 в адресе — режим не теряется
+        location.reload();          // вкладки развернутся снова сами — по правам из /api/rag/me
     };
 
     /*-------блок загрузки классификаторов: top-level await (скрипт — module) -------*/
@@ -936,7 +945,7 @@
     }
 
     function showTab(name) {
-        if (name !== 'chat' && !isAdmin) return;   // без adminPanel=1 доступен только чат
+        if (name !== 'chat' && !isAdmin) return;   // без права edit:admin доступен только чат
         for (const [k, v] of Object.entries(TABS)) {
             $(v.tab).classList.toggle('on', k === name);
             $(v.view).hidden = k !== name;
