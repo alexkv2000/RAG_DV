@@ -24,13 +24,23 @@ public class AdminPromptController {
     /** Редактируемые system-промпты (ключ rag_control → подпись). */
     private record PromptDef(String key, String title) {}
 
+    /* XML-интеграция (файл → XML): потребителя в Java нет — значения лежат в dbo.rag_control
+       и правятся на вкладке «Промты»; GET /prompts, POST /prompts и /prompts/reset идут
+       по списку PROMPTS ниже и подхватывают новые ключи автоматически. Дефолтов в коде нет:
+       «Дефолт из кода» просто удаляет строку из таблицы (значение станет пустым).
+       Написание ключей — как в rag_control: 'extract_system_xml_promt' (проверьте вторую 'p'). */
+    private static final String CTRL_KEY_XML_PROMPT = "extract_system_xml_promt";
+    private static final String CTRL_KEY_XML_SCHEMA = "extract_xml_schema";
+
     private static final List<PromptDef> PROMPTS = List.of(
             new PromptDef(SystemPromptProvider.CTRL_KEY, "Системный — обычные вопросы"),
             new PromptDef(ComparePromptProvider.CTRL_KEY, "Сравнение — отличия версий"),
             new PromptDef(DocSummaryService.CTRL_KEY, "Суммарный — краткое содержание"),
             new PromptDef(DirectChatPromptProvider.CTRL_KEY, "Свободный чат — без базы знаний"),
             new PromptDef(ExtractPromptProvider.CTRL_KEY_PROMPT, "Извлечение — промпт (файл → JSON)"),
-            new PromptDef(ExtractPromptProvider.CTRL_KEY_SCHEMA, "Извлечение — JSON-структура"));
+            new PromptDef(ExtractPromptProvider.CTRL_KEY_SCHEMA, "Извлечение — JSON-структура"),
+            new PromptDef(CTRL_KEY_XML_PROMPT, "Извлечение — промпт (файл → XML)"),
+            new PromptDef(CTRL_KEY_XML_SCHEMA, "Извлечение — XML-структура"));
 
     private final JdbcTemplate jdbc;
 
@@ -56,7 +66,9 @@ public class AdminPromptController {
 
     public record PromptRequest(String key, String value) {}
 
-    /** Сохранение промпта; применяется к следующему вопросу без рестарта. */
+    /** Сохранение промпта; применяется к следующему вопросу без рестарта.
+     *  JSON-валидация — только у extract_json_schema; extract_xml_schema (формат XML)
+     *  сохраняется как обычный текст. */
     @PostMapping("/prompts")
     public Map<String, Object> savePrompt(@RequestBody PromptRequest req) {
         titleOf(req.key());
@@ -80,7 +92,8 @@ public class AdminPromptController {
     }
 
     /** Сброс: строка удаляется — провайдер тут же берёт DEFAULT из кода,
-     *  а следующий рестарт просеет дефолт в таблицу заново. */
+     *  а следующий рестарт просеет дефолт в таблицу заново (для XML-ключей дефолта
+     *  в коде нет — строка просто удаляется, значение становится пустым). */
     @PostMapping("/prompts/reset")
     public Map<String, String> resetPrompt(@RequestBody PromptRequest req) {
         titleOf(req.key());

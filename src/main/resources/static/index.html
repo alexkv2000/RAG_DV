@@ -205,7 +205,8 @@
         .pkey{font-family:Consolas,"Courier New",monospace;font-size:11px;color:var(--c-text-3)}
         .pstat{font-size:12px;color:var(--c-text-3);margin-top:4px}
         .pstat.err{color:var(--c-err)}
-
+        /* контейнер XML-промптов: пустой (бэкенд без XML-ключей) — не занимает место */
+        #promptsListXml:empty{display:none}
         /* ===== eval ===== */
         #evalHistory tr[data-run]{cursor:pointer}
         #evalHistory tr[data-run]:hover{background:#f9f9f9}
@@ -393,7 +394,7 @@
             System-промпты лежат в dbo.rag_control и читаются перед КАЖДЫМ вопросом — изменения
             применяются сразу, без рестарта, на все инстансы. «Дефолт из кода» удаляет строку из
             таблицы: работает DEFAULT, зашитый в Java-классе (после рестарта он же просеется в БД).
-            Ключи: ask_system_prompt · compare_system_prompt · summary_system_prompt · direct_chat_system_prompt (свободный чат) · extract_system_prompt / extract_json_schema (интеграция: файл → JSON; в схеме ключ — имя поля, значение — подсказка модели, может быть пустым).
+            Ключи: ask_system_prompt · compare_system_prompt · summary_system_prompt · direct_chat_system_prompt (свободный чат) · extract_system_prompt / extract_json_schema (интеграция: файл → JSON) · extract_system_xml_promt / extract_xml_schema (интеграция: файл → XML).
         </div>
     </div>
     <div id="promptsList"></div>
@@ -409,6 +410,11 @@
         </div>
         <div id="extOutP" class="mono">Файл → /api/rag/extract → JSON по схеме из карточки выше.</div>
     </div>
+
+    <!-- XML-промпты (extract_system_xml_promt / extract_xml_schema): карточки строит
+         loadPrompts() и кладёт СЮДА — после «Проверки извлечения на файле». Обычные
+         промпты (включая «Извлечение — JSON-структура») — в #promptsList выше. -->
+    <div id="promptsListXml"></div>
 
     <div class="acard">
         <div class="ahead"><b>Ошибки индексации (последние 20)</b>
@@ -1661,20 +1667,38 @@
     }
     $('btnErrP').onclick = loadErrorsP;
     /* ---- вкладка «Промты»: rag_control ask/compare/summary_system_prompt ---- */
+    /** Ключи XML-интеграции: их карточки рендерятся в #promptsListXml (после «Проверки
+     *  извлечения на файле»), остальные — в #promptsList. Должны совпадать с константами
+     *  CTRL_KEY_XML_* в AdminPromptController. */
+    const XML_PROMPT_KEYS = ['extract_system_xml_promt', 'extract_xml_schema'];
+
     async function loadPrompts() {
         const el = $('promptsList');
+        const elXml = $('promptsListXml');
         el.innerHTML = '<div class="mono">загружаю…</div>';
         try {
             const list = await api('/api/rag/admin/prompts');
             el.innerHTML = '';
-            for (const p of list) el.appendChild(promptCard(p));
+            elXml.innerHTML = '';
+            for (const p of list) {
+                (XML_PROMPT_KEYS.includes(p.key) ? elXml : el).appendChild(promptCard(p));
+            }
+            elXml.hidden = !elXml.children.length;   // бэкенд без XML-ключей — контейнер скрыт
         } catch (e) {
             el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
         }
     }
 
+    /** Подпись «когда подействует сохранение» — зависит от потребителя промпта. */
+    function effectOf(key) {
+        if (key === 'extract_json_schema') return ' — действует со следующего файла (/api/rag/extract)';
+        if (XML_PROMPT_KEYS.includes(key)) return ' — значение в rag_control, читается XML-интеграцией';
+        return ' — действует со следующего вопроса';
+    }
+
     function promptCard(p) {
-        const isSchema = p.key === 'extract_json_schema';
+        const isSchema = p.key === 'extract_json_schema';   // живая валидация JSON — только JSON-схема
+        const isXml = XML_PROMPT_KEYS.includes(p.key);      // XML-промпты: потребителя в Java нет
         const card = document.createElement('div');
         card.className = 'acard';
 
@@ -1701,7 +1725,9 @@
 
         const hint = document.createElement('div');
         hint.className = 'pstat';
-        if (!orig) hint.textContent = '⚠ в БД не задан — работает дефолт из кода';
+        if (!orig) hint.textContent = isXml
+            ? '⚠ в БД не задан — заполните значение и сохраните'
+            : '⚠ в БД не задан — работает дефолт из кода';
 
         const stat = document.createElement('div');
         stat.className = 'pstat';
@@ -1745,7 +1771,9 @@
         btnDef.type = 'button';
         btnDef.className = 'gray';
         btnDef.textContent = '↺ Дефолт из кода';
-        btnDef.title = 'Удалить строку из rag_control — заработает DEFAULT из Java-класса';
+        btnDef.title = isXml
+            ? 'Удалить строку из rag_control — значение станет пустым (дефолта в коде нет)'
+            : 'Удалить строку из rag_control — заработает DEFAULT из Java-класса';
         const btnSave = document.createElement('button');
         btnSave.type = 'button';
         btnSave.textContent = '💾 Сохранить';
@@ -1762,8 +1790,7 @@
                 });
                 orig = ta.value;
                 stat.className = 'pstat';
-                stat.textContent = '✓ сохранено (' + j.chars + ' симв.) — действует '
-                    + (isSchema ? 'со следующего файла (/api/rag/extract)' : 'со следующего вопроса');
+                stat.textContent = '✓ сохранено (' + j.chars + ' симв.)' + effectOf(p.key);
                 hint.textContent = '';
                 if (isSchema) loadExtFields($('extFields'));   // обновить бейджи схемы в админке
             } catch (e) {
@@ -1774,8 +1801,10 @@
         };
 
         btnDef.onclick = async () => {
-            if (!confirm('Вернуть промпт «' + p.title + '» к дефолту из кода?\n' +
-                'Текущий текст в БД будет удалён.')) return;
+            const msg = isXml
+                ? 'Очистить «' + p.title + '» в БД?\nСтрока rag_control будет удалена; дефолта в коде нет — значение станет пустым.'
+                : 'Вернуть промпт «' + p.title + '» к дефолту из кода?\nТекущий текст в БД будет удалён.';
+            if (!confirm(msg)) return;
             try {
                 await api('/api/rag/admin/prompts/reset', {
                     method: 'POST',
