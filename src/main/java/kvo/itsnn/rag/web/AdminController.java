@@ -5,6 +5,7 @@ import kvo.itsnn.rag.index.VectorIndex;
 import kvo.itsnn.rag.refsync.RagScheduler;
 import kvo.itsnn.rag.refsync.RefRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;   // ← ПАТЧ
 import org.springframework.web.bind.annotation.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,14 +31,16 @@ public class AdminController {
     private final JdbcTemplate jdbc;
     private final RagProperties props;
     private final RagScheduler scheduler;
+    private final TransactionTemplate tx;      // ← ПАТЧ: атомарное удаление карточки с ошибкой
 
     public AdminController(RefRepository refs, VectorIndex index, JdbcTemplate jdbc,
-                           RagProperties props, RagScheduler scheduler) {
+                           RagProperties props, RagScheduler scheduler, TransactionTemplate tx) {
         this.refs = refs;
         this.index = index;
         this.jdbc = jdbc;
         this.props = props;
         this.scheduler = scheduler;
+        this.tx = tx;
     }
 
     @GetMapping("/stats")
@@ -116,9 +119,17 @@ public class AdminController {
         return v;
     }
 
+    /**
+     * ← ПАТЧ. Ручная переиндексация: заявка переводится в N со сбросом ретраев.
+     * Заявки нет (карточка удалена кнопкой 🗑 или ещё не создана синхронизацией) —
+     * честная ошибка (400 с текстом) вместо молчаливого no-op.
+     */
     @PostMapping("/reindex/{guid}")
     public Map<String, String> reindex(@PathVariable UUID guid) {
-        refs.forceReindex(guid);
+        if (!refs.forceReindex(guid)) {
+            throw new IllegalArgumentException("заявка " + guid + " не найдена — карточка удалена (🗑)"
+                    + " или ещё не создана синхронизацией");
+        }
         return Map.of(RESULT, "queued");
     }
 
@@ -167,10 +178,17 @@ public class AdminController {
             return m;
         });
     }
-    /** Удаление КАРТОЧКИ с ошибкой из базы знаний RAG: все строки dbo.rag_document_ref
-     *  этого document_guid (по одной на файл), чанки, эмбеддинги и векторы Chroma.
-     *  Документ в DocsVision не трогается; если синхронизация снова создаст заявку,
-     *  карточка вернётся как новая (status N). Индексируемую сейчас (P) не удаляем. */
+
+    /**
+     * ← ПАТЧ (переработан порядок удалений). Удаление КАРТОЧКИ с ошибкой из базы знаний
+     * RAG: все строки dbo.rag_document_ref этого document_guid (по одной на файл),
+     * чанки, эмбеддинги и векторы Chroma. БД-часть удаляется АТОМАРНО (TransactionTemplate)
+     * и в порядке FK: rag_embedding → rag_chunk → rag_document_ref — прежний порядок
+     * (заявка первой) сам нарушал FK_rag_chunk_document_file, если у него нет
+     * ON DELETE CASCADE. Документ в DocsVision не трогается; если синхронизация снова
+     * создаст заявку, карточка вернётся как новая (status N). Индексируемую сейчас (P)
+     * не удаляем — гонка с claim откатывает транзакцию целиком.
+     */
     @DeleteMapping("/errors/{guid}")
     public Map<String, Object> deleteErrorCard(@PathVariable UUID guid) {
         record RefRow(String status, String errorMsg) {}
@@ -189,18 +207,21 @@ public class AdminController {
         }
 
         List<Long> chunkIds = refs.chunkIdsOf(guid);        // id для Chroma берём ДО удаления
-        int removed = jdbc.update("""
-                DELETE FROM dbo.rag_document_ref
-                WHERE document_guid = ? AND status <> 'P'
-                """, guid);
-        if (removed == 0) {                                 // застали claim между проверкой и удалением
-            throw new IllegalArgumentException("карточка сейчас индексируется (P) — попробуйте ещё раз");
-        }
-        jdbc.update("""
-                DELETE FROM dbo.rag_embedding
-                WHERE chunk_id IN (SELECT chunk_id FROM dbo.rag_chunk WHERE document_guid = ?)
-                """, guid);
-        jdbc.update("DELETE FROM dbo.rag_chunk WHERE document_guid = ?", guid);
+        int removed = tx.execute(st -> {
+            jdbc.update("""
+                    DELETE FROM dbo.rag_embedding
+                    WHERE chunk_id IN (SELECT chunk_id FROM dbo.rag_chunk WHERE document_guid = ?)
+                    """, guid);
+            jdbc.update("DELETE FROM dbo.rag_chunk WHERE document_guid = ?", guid);
+            int n = jdbc.update("""
+                    DELETE FROM dbo.rag_document_ref
+                    WHERE document_guid = ? AND status <> 'P'
+                    """, guid);
+            if (n == 0) {   // застали claim между проверкой и удалением — откатываем всё
+                throw new IllegalArgumentException("карточка сейчас индексируется (P) — попробуйте ещё раз");
+            }
+            return n;
+        });
         boolean vectorsClean = removeVectors(guid, chunkIds);
         log.info("ADMIN: удалена карточка с ошибкой {} — строк ref: {}, чанков: {}, Chroma: {}",
                 guid, removed, chunkIds.size(), vectorsClean ? "вычищено" : "сироты (добьёт сверка)");
@@ -221,6 +242,7 @@ public class AdminController {
             return false;
         }
     }
+
     @PostMapping("/pause")
     public Map<String, String> pause() {
         refs.setPaused(true);

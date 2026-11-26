@@ -125,6 +125,23 @@ public class RefRepository {
                 .stream().distinct().toList();
     }
 
+    /**
+     * ← ПАТЧ. row_id файлов, зарегистрированных заявкой документа. FK
+     * rag_chunk(document_guid, file_id) ссылается на пару (document_guid, row_id),
+     * а Ingest берёт список файлов из rag_source_content_view — этим методом он
+     * сверяет вьюху с заявкой и не вставляет чанки для незарегистрированных файлов.
+     */
+    public Set<UUID> registeredFileIds(UUID guid) {
+        return jdbc.query("SELECT row_id FROM dbo.rag_document_ref WHERE document_guid = ?",
+                rs -> {
+                    Set<UUID> out = new HashSet<>();
+                    while (rs.next()) {
+                        out.add(UUID.fromString(rs.getString(1)));
+                    }
+                    return out;
+                }, guid);
+    }
+
     public boolean sameHash(UUID guid, byte[] hash) {
         Integer n = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM dbo.rag_document_ref
@@ -151,12 +168,20 @@ public class RefRepository {
                 """, maxRetries, error, guid);
     }
 
-    public void forceReindex(UUID guid) {
-        jdbc.update("""
+    /**
+     * ← ПАТЧ. Ручная переиндексация: строки заявки в N СО СБРОСОМ ретраев — без него
+     * E-карточка после повторной постановки в очередь получала одну попытку
+     * (retry_count уже ≥ maxRetries, и markResult сразу вернул бы E).
+     * false — заявки нет: карточка удалена (🗑) или ещё не создана синхронизацией;
+     * контроллер сообщит об этом вместо молчаливого no-op.
+     */
+    public boolean forceReindex(UUID guid) {
+        return jdbc.update("""
                 UPDATE dbo.rag_document_ref
-                   SET status='N', error_msg=NULL, version=version+1, updated_at=SYSUTCDATETIME()
+                   SET status='N', error_msg=NULL, retry_count=0, version=version+1,
+                       updated_at=SYSUTCDATETIME()
                  WHERE document_guid=? AND status IN ('I','E','X')
-                """, guid);
+                """, guid) > 0;
     }
 
     public List<UUID> fetchDeleted(int limit) {

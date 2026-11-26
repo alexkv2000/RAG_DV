@@ -122,6 +122,11 @@
             <artifactId>caffeine</artifactId>
             <!-- версию управляет spring-boot-dependencies BOM -->
         </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>5.5.1</version>
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>

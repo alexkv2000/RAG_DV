@@ -21,6 +21,7 @@ import org.apache.poi.hssf.extractor.ExcelExtractor;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.xssf.extractor.XSSFExcelExtractor;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.xslf.usermodel.*;
 
 import javax.swing.text.rtf.RTFEditorKit;
 
@@ -38,6 +39,7 @@ public class TextExtractor {
 
     public String extract(ContentLoader.LoadedFile f) throws IOException {
         return switch (f.ext()) {
+            case "pptx" -> pptx(f.bytes());
             case "pdf" -> pdf(f.bytes());
             case "docx" -> docx(f.bytes());
             case "doc" -> doc(f.bytes());
@@ -49,6 +51,53 @@ public class TextExtractor {
             case "rtf" -> rtf(f.bytes());
             default -> plain(f.bytes());
         };
+    }
+
+    /** Презентация: текст фигур слайдов + заметки + таблицы (XSLF, poi-ooxml). */
+    private String pptx(byte[] b) throws IOException {
+        try (XMLSlideShow ppt = new XMLSlideShow(new ByteArrayInputStream(b))) {
+            StringBuilder sb = new StringBuilder();
+            for (XSLFSlide slide : ppt.getSlides()) {
+                sheetText(slide, sb);
+                XSLFNotes notes = slide.getNotes();   // заметки автора — тоже контент
+                if (notes != null) sheetText(notes, sb);
+            }
+            if (sb.toString().isBlank()) throw new IllegalArgumentException("пустая презентация");
+            return sb.toString();
+        }
+    }
+    /** Текст фигур листа (слайда/заметок): текстбоксы и таблицы. */
+    /** Текст фигур листа (слайда/заметок): текстбоксы и таблицы. */
+    private static void sheetText(XSLFSheet sheet, StringBuilder sb) {
+        for (XSLFShape shape : sheet.getShapes()) {
+            shapeText(shape, sb);
+        }
+    }
+    /** Одна фигура: текстбокс или таблица (остальные типы фигур текста не несут). */
+    private static void shapeText(XSLFShape shape, StringBuilder sb) {
+        if (shape instanceof XSLFTextShape ts) {
+            appendIfNotBlank(sb, ts.getText(), "\n\n");
+        } else if (shape instanceof XSLFTable table) {
+            tableText(table, sb);
+        }
+    }
+    /** Таблица: ячейки строки через таб, строки — через перевод, таблица — пустой строкой. */
+    private static void tableText(XSLFTable table, StringBuilder sb) {
+        for (XSLFTableRow row : table.getRows()) {
+            rowText(row, sb);
+            sb.append('\n');
+        }
+        sb.append('\n');
+    }
+    private static void rowText(XSLFTableRow row, StringBuilder sb) {
+        for (XSLFTableCell cell : row.getCells()) {
+            appendIfNotBlank(sb, cell.getText(), "\t");
+        }
+    }
+    /** Добавить текст с суффиксом, если он не пуст (null/blank пропускаем). */
+    private static void appendIfNotBlank(StringBuilder sb, String text, String suffix) {
+        if (text == null || text.isBlank()) return;
+        sb.append(text).append(suffix);
     }
 
     private String xlsx(byte[] b) throws IOException {

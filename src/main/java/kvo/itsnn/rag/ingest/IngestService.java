@@ -15,6 +15,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;      // ← ПАТЧ: пересечение файлов вьюхи и заявки
+import java.util.UUID;     // ← ПАТЧ
 import java.util.regex.Pattern;
 
 @Service
@@ -77,7 +79,8 @@ public class IngestService {
         List<ContentLoader.FileMeta> metas = contentLoader.loadMeta(ref.guid());
         List<Long> oldIds = refs.chunkIdsOf(ref.guid());
         if (metas.isEmpty()) { markEmpty(ref, oldIds); return; }
-        Extracted ex = extractParts(ref, metas);            // байты — только одного файла в моменте
+        List<ContentLoader.FileMeta> files = registeredOnly(ref, metas);   // ← ПАТЧ: только файлы из заявки
+        Extracted ex = extractParts(ref, files);            // байты — только одного файла в моменте
         if (ex.parts().isEmpty()) {
             requireText(ex.sawContentFile());
             markEmpty(ref, oldIds);
@@ -96,9 +99,37 @@ public class IngestService {
         });
         publishVectors(oldIds, ref, ids, vectors);
         refs.markIndexed(ref.guid(), hash);
-        log.info("Проиндексирован {} [{}] — {} чанков из {} файлов за {} мс",
-                ref.guid(), ref.classifier(), ids.size(), metas.size(),
+        log.info("Проиндексирован {} [{}] — {} чанков из {} файлов за {} мс",          // ← ПАТЧ: files.size()
+                ref.guid(), ref.classifier(), ids.size(), files.size(),
                 System.currentTimeMillis() - t0);
+    }
+
+    /**
+     * ← ПАТЧ. Только файлы, зарегистрированные заявкой. rag_chunk.file_id приходит из
+     * rag_source_content_view (dvsys_files.FileID), а FK rag_chunk(document_guid, file_id)
+     * требует пару (document_guid, row_id) в dbo.rag_document_ref: рассинхрон вьюхи и
+     * заявки (синхронизация записала в row_id BinaryID вместо FileID) раньше валил INSERT
+     * чанков простынёй SQL «FK_rag_chunk_document_file». Теперь FK не может нарушиться:
+     * индексируем пересечение; полностью незарегистрированный документ останавливается
+     * с понятной ошибкой (markResult → error_msg в админке), а не с дампом SQL.
+     * Файл появится в заявке — синхронизация вернёт документ в N, он переиндексируется целиком.
+     */
+    private List<ContentLoader.FileMeta> registeredOnly(DocumentRef ref,
+                                                        List<ContentLoader.FileMeta> metas) {
+        Set<UUID> registered = refs.registeredFileIds(ref.guid());
+        List<ContentLoader.FileMeta> known = metas.stream()
+                .filter(m -> registered.contains(m.fileId()))
+                .toList();
+        if (known.isEmpty()) {
+            throw new IllegalStateException("файлы документа не зарегистрированы в dbo.rag_document_ref"
+                    + " (row_id заявки ≠ file_id вьюхи) — проверьте синхронизацию заявки");
+        }
+        if (known.size() < metas.size()) {
+            log.warn("{}: {} из {} файлов без строки в заявке — индексируем зарегистрированные; "
+                            + "синхронизация досыплет строку, документ переиндексируется целиком",
+                    ref.guid(), known.size(), metas.size());
+        }
+        return known;
     }
 
     private record Extracted(List<ChunkPart> parts, MessageDigest digest, boolean sawContentFile) {}

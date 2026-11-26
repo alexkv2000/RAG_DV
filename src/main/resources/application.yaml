@@ -92,3 +92,4 @@ rag:
 logging:
   level:
     kvo.itsnn.rag: INFO
+    org.apache.poi: ERROR
