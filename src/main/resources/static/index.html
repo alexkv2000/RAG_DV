@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><title>RAG-чат</title><style>
+<html lang="ru"><head><meta charset="utf-8">
+    <link type="image/x-icon" rel="shortcut icon" href="iconsAI16.ico">
+    <title>RAG-чат</title><style>
     /* ===== корпоративная палитра (RKIT/GAZ: #1976d2, Segoe UI, радиус 4px) ===== */
     :root{
         --c-primary:#1976d2;        /* основной синий */
@@ -162,6 +164,11 @@
     .ahead b{color:var(--c-text);font-size:14px;font-weight:600}
     .sm{padding:5px 12px;font-size:12px;background:#fff;color:var(--c-text-2);border:1px solid var(--c-border)}
     .sm:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
+    /* ===== кнопки-иконки в строках таблиц (удаление карточек с ошибками) ===== */
+    .icobtn{padding:3px 9px;font-size:13px;background:#fff;color:var(--c-text-2);
+        border:1px solid var(--c-border);border-radius:3px;line-height:1.4}
+    .icobtn:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
+    .icobtn.del:hover{background:var(--c-err-bg);border-color:var(--c-err);color:var(--c-err)}
     .arow{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
     .arow input{flex:1;min-width:230px}
     .sb{display:inline-block;background:#fff;border:1px solid var(--c-border-soft);border-radius:var(--r);
@@ -357,18 +364,6 @@
             Ответ LLM может идти до пары минут.</div>
     </div>
 
-    <div class="acard">
-        <div class="ahead"><b>Ошибки индексации (последние 20)</b>
-            <button type="button" class="sm" id="btnErr">⟳ Обновить</button></div>
-        <div id="errs"></div>
-    </div>
-
-    <div class="acard">
-        <div class="ahead"><b>Проиндексированные файлы (последние 200)</b>
-            <button type="button" class="sm" id="btnFiles">⟳ Обновить</button></div>
-        <div id="files"></div>
-    </div>
-
 </div>
 
 <!-- ==================== вкладка «Промты» ==================== -->
@@ -396,6 +391,28 @@
     </div>
 </div>
 
+<div class="acard">
+    <div class="ahead"><b>Ошибки индексации (последние 20)</b>
+        <button type="button" class="sm" id="btnErrP">⟳ Обновить</button></div>
+    <div class="mono" style="font-size:11.5px;color:#888">Карточки, не прошедшие индексацию
+        (status E или ждут ретрая с ошибкой; строки свернуты в карточки — файлов может быть
+        несколько). 🗑 удаляет карточку ЦЕЛИКОМ из базы знаний RAG: строки заявки, чанки,
+        эмбеддинги и векторы Chroma. Документ в DocsVision не трогается; если заявка
+        появится снова при синхронизации — карточка вернётся как новая.</div>
+    <div id="errsP"><div class="mono">нажмите ⟳ Обновить</div></div>
+</div>
+
+<div class="acard">
+    <div class="ahead"><b>Удалить ошибочные документы (последние 20)</b>
+        <button type="button" class="sm" id="btnErr">⟳ Обновить</button></div>
+    <div id="errs"></div>
+</div>
+
+<div class="acard">
+    <div class="ahead"><b>Проиндексированные файлы (последние 200)</b>
+        <button type="button" class="sm" id="btnFiles">⟳ Обновить</button></div>
+    <div id="files"></div>
+</div>
 <script type="module">
     console.info('RAG UI v5.3 — вкладки «Админ-панель»/«Промты» по правам пользователя (/api/rag/me), а не по ?adminPanel=1');
     /* crypto.randomUUID() есть только в secure context (https/localhost);
@@ -945,6 +962,9 @@
     }
 
     function showTab(name) {
+        if (name === 'prompts' && !promptsInit) {
+            promptsInit = true; loadPrompts(); loadErrorsP();
+        }
         if (name !== 'chat' && !isAdmin) return;   // без права edit:admin доступен только чат
         for (const [k, v] of Object.entries(TABS)) {
             $(v.tab).classList.toggle('on', k === name);
@@ -1516,6 +1536,74 @@
     $('btnExtract').onclick = e => runExtract($('extFile'), $('extOut'), e.target);
     $('btnExtractP').onclick = e => runExtract($('extFileP'), $('extOutP'), e.target);
 
+    /* ---- вкладка «Промты»: карточки с ошибками индексации + удаление ---- */
+    async function loadErrorsP() {
+        const el = $('errsP');
+        el.innerHTML = '<div class="mono">загружаю…</div>';
+        try {
+            const list = await api('/api/rag/admin/errors');
+            const cards = groupErrorCards(list);
+            if (!cards.length) {
+                el.innerHTML = '<div class="mono ok">Ошибок нет ✓</div>';
+                return;
+            }
+            let h = '<table class="tbl"><tr><th>документ</th><th>файлов</th><th>ретраи</th>'
+                + '<th>ошибка</th><th>когда</th><th style="width:40px"></th></tr>';
+            for (const c of cards) {
+                h += '<tr><td><span class="gw" style="max-width:300px" title="' + esc(c.guid) + '">'
+                    + esc(c.name || c.guid) + '</span></td>'
+                    + '<td>' + c.files + '</td>'
+                    + '<td>' + c.retries + '</td>'
+                    + '<td>' + esc(c.error || '') + '</td>'
+                    + '<td class="mono">' + esc(c.at || '') + '</td>'
+                    + '<td><button type="button" class="icobtn del" data-g="' + esc(c.guid)
+                    + '" data-n="' + esc(c.name || '') + '" title="Удалить карточку из базы знаний RAG">🗑</button></td></tr>';
+            }
+            el.innerHTML = h + '</table>';
+            el.querySelectorAll('button[data-g]').forEach(b =>
+                b.onclick = () => delErrorCard(b.dataset.g, b.dataset.n, b));
+        } catch (e) {
+            el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
+        }
+    }
+
+    /** Строки ошибок (по одной на файл) сворачиваем в карточки: статус/ошибка у строк
+     *  одной карточки общие, а удаляем её целиком по document_guid. */
+    function groupErrorCards(list) {
+        const by = new Map();
+        for (const r of (Array.isArray(list) ? list : [])) {
+            const guid = String(r.guid || '');
+            let c = by.get(guid);
+            if (!c) {
+                c = {guid, name: '', files: 0, retries: 0, error: '', at: ''};
+                by.set(guid, c);
+            }
+            c.files++;
+            if (String(r.at || '') >= c.at) {      // позднее updated_at — актуальные ошибка/ретраи
+                c.at = String(r.at || '');
+                c.error = String(r.error || '');
+                c.retries = Number(r.retries || 0);
+            }
+            c.name = c.name || String(r.name || '');
+        }
+        return [...by.values()];
+    }
+
+    async function delErrorCard(guid, name, btn) {
+        const what = name ? '«' + name + '»\n' : '';
+        if (!confirm('Удалить карточку из базы знаний RAG?\n\n' + what + guid
+            + '\n\nУйдут ВСЕ строки заявки (по одной на файл), чанки, эмбеддинги и векторы Chroma.'
+            + '\nДокумент в DocsVision не удаляется.')) return;
+        btn.disabled = true;
+        try {
+            await api('/api/rag/admin/errors/' + encodeURIComponent(guid), {method: 'DELETE'});
+            loadErrorsP();                 // перерисовка — удалённой карточки в списке уже нет
+        } catch (e) {
+            alert('Не удалено: ' + e.message);
+            btn.disabled = false;
+        }
+    }
+    $('btnErrP').onclick = loadErrorsP;
     /* ---- вкладка «Промты»: rag_control ask/compare/summary_system_prompt ---- */
     async function loadPrompts() {
         const el = $('promptsList');

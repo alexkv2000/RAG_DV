@@ -6,6 +6,8 @@ import kvo.itsnn.rag.refsync.RagScheduler;
 import kvo.itsnn.rag.refsync.RefRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
@@ -16,7 +18,7 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/rag/admin")
 public class AdminController {
-
+    private static final Logger log = LoggerFactory.getLogger(AdminController.class);
     private static final String RESULT = "result";
     private static final String SAVED = "saved";
     private static final String NIGHT_START = "nightStart";
@@ -145,21 +147,80 @@ public class AdminController {
         return out;
     }
 
+    /** Последние ошибки индексации; строка = файл карточки, ошибка у карточки общая. */
     @GetMapping("/errors")
     public List<Map<String, Object>> errors() {
         return jdbc.query("""
-                SELECT TOP (20) document_guid, retry_count,
+                SELECT TOP (20) document_guid, doc_name, status, retry_count,
                        LEFT(error_msg, 300) AS error, updated_at
                 FROM dbo.rag_document_ref
                 WHERE status = 'E' OR error_msg IS NOT NULL
                 ORDER BY updated_at DESC
-                """, (rs, i) -> Map.of(
-                "guid", rs.getString(1),
-                "retries", rs.getInt(2),
-                ERROR, rs.getString(3) == null ? "" : rs.getString(3),
-                "at", rs.getTimestamp(4).toString()));
+                """, (rs, i) -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("guid", rs.getString(1));
+            m.put("name", rs.getString(2));
+            m.put("status", rs.getString(3));
+            m.put("retries", rs.getInt(4));
+            m.put(ERROR, rs.getString(5) == null ? "" : rs.getString(5));
+            m.put("at", rs.getTimestamp(6).toString());
+            return m;
+        });
+    }
+    /** Удаление КАРТОЧКИ с ошибкой из базы знаний RAG: все строки dbo.rag_document_ref
+     *  этого document_guid (по одной на файл), чанки, эмбеддинги и векторы Chroma.
+     *  Документ в DocsVision не трогается; если синхронизация снова создаст заявку,
+     *  карточка вернётся как новая (status N). Индексируемую сейчас (P) не удаляем. */
+    @DeleteMapping("/errors/{guid}")
+    public Map<String, Object> deleteErrorCard(@PathVariable UUID guid) {
+        record RefRow(String status, String errorMsg) {}
+        List<RefRow> rows = jdbc.query(
+                "SELECT status, error_msg FROM dbo.rag_document_ref WHERE document_guid = ?",
+                (rs, i) -> new RefRow(rs.getString(1), rs.getString(2)), guid);
+        if (rows.isEmpty()) {
+            throw new IllegalArgumentException("карточка " + guid + " в dbo.rag_document_ref не найдена");
+        }
+        if (rows.stream().anyMatch(r -> "P".equals(r.status()))) {
+            throw new IllegalArgumentException("карточка сейчас индексируется (P) — обновите список после завершения");
+        }
+        if (rows.stream().noneMatch(r -> "E".equals(r.status())
+                || (r.errorMsg() != null && !r.errorMsg().isBlank()))) {
+            throw new IllegalArgumentException("у карточки нет ошибок — удаляются только карточки из списка ошибок");
+        }
+
+        List<Long> chunkIds = refs.chunkIdsOf(guid);        // id для Chroma берём ДО удаления
+        int removed = jdbc.update("""
+                DELETE FROM dbo.rag_document_ref
+                WHERE document_guid = ? AND status <> 'P'
+                """, guid);
+        if (removed == 0) {                                 // застали claim между проверкой и удалением
+            throw new IllegalArgumentException("карточка сейчас индексируется (P) — попробуйте ещё раз");
+        }
+        jdbc.update("""
+                DELETE FROM dbo.rag_embedding
+                WHERE chunk_id IN (SELECT chunk_id FROM dbo.rag_chunk WHERE document_guid = ?)
+                """, guid);
+        jdbc.update("DELETE FROM dbo.rag_chunk WHERE document_guid = ?", guid);
+        boolean vectorsClean = removeVectors(guid, chunkIds);
+        log.info("ADMIN: удалена карточка с ошибкой {} — строк ref: {}, чанков: {}, Chroma: {}",
+                guid, removed, chunkIds.size(), vectorsClean ? "вычищено" : "сироты (добьёт сверка)");
+        return Map.of(RESULT, "deleted", "guid", guid.toString(),
+                "refRows", removed, "chunks", chunkIds.size(),
+                "vectors", vectorsClean ? "removed" : "orphaned");
     }
 
+    /** Векторы Chroma — best-effort: сбой Chroma не должен рушить удаление карточки
+     *  (сирот добьёт ночная сверка/пересборка, как в IndexCleanupService). */
+    private boolean removeVectors(UUID guid, List<Long> chunkIds) {
+        if (chunkIds.isEmpty()) return true;
+        try {
+            index.removeChunks(chunkIds);
+            return true;
+        } catch (Exception e) {
+            log.warn("ADMIN: векторы Chroma {} не удалены ({})", guid, e.getMessage());
+            return false;
+        }
+    }
     @PostMapping("/pause")
     public Map<String, String> pause() {
         refs.setPaused(true);
