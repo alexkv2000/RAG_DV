@@ -2,209 +2,217 @@
 <html lang="ru"><head><meta charset="utf-8">
     <link type="image/x-icon" rel="shortcut icon" href="iconsAI16.ico">
     <title>RAG-чат</title><style>
-    /* ===== корпоративная палитра (RKIT/GAZ: #1976d2, Segoe UI, радиус 4px) ===== */
-    :root{
-        --c-primary:#1976d2;        /* основной синий */
-        --c-primary-hover:#1565c0;
-        --c-primary-active:#0d47a1;
-        --c-primary-light:#e3f2fd;  /* выделение/ховер */
-        --c-primary-lighter:#bbdefb;
-        --c-border:#d0d0d0;         /* поля ввода */
-        --c-border-hover:#b0b0b0;
-        --c-border-soft:#e0e0e0;    /* разделители */
-        --c-border-table:#ddd;      /* таблицы/карточки */
-        --c-bg:#f5f5f5;             /* фон страницы */
-        --c-card:#fff;
-        --c-section:#fafafa;
-        --c-text:#333;
-        --c-text-2:#666;
-        --c-text-3:#888;
-        --c-ok:#2e7d32;  --c-ok-bg:#e8f5e9;
-        --c-err:#c62828; --c-err-bg:#ffebee;
-        --c-warn:#e65100;--c-warn-bg:#fff3e0;
-        --r:4px;                    /* единый радиус скругления */
-    }
-    body{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;max-width:900px;margin:24px auto;
-        background:var(--c-bg);padding:0 12px;color:var(--c-text);font-size:14px}
+        /* ===== корпоративная палитра (RKIT/GAZ: #1976d2, Segoe UI, радиус 4px) ===== */
+        :root{
+            --c-primary:#1976d2;        /* основной синий */
+            --c-primary-hover:#1565c0;
+            --c-primary-active:#0d47a1;
+            --c-primary-light:#e3f2fd;  /* выделение/ховер */
+            --c-primary-lighter:#bbdefb;
+            --c-border:#d0d0d0;         /* поля ввода */
+            --c-border-hover:#b0b0b0;
+            --c-border-soft:#e0e0e0;    /* разделители */
+            --c-border-table:#ddd;      /* таблицы/карточки */
+            --c-bg:#f5f5f5;             /* фон страницы */
+            --c-card:#fff;
+            --c-section:#fafafa;
+            --c-text:#333;
+            --c-text-2:#666;
+            --c-text-3:#888;
+            --c-ok:#2e7d32;  --c-ok-bg:#e8f5e9;
+            --c-err:#c62828; --c-err-bg:#ffebee;
+            --c-warn:#e65100;--c-warn-bg:#fff3e0;
+            --r:4px;                    /* единый радиус скругления */
+        }
+        body{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;max-width:900px;margin:24px auto;
+            background:var(--c-bg);padding:0 12px;color:var(--c-text);font-size:14px}
 
-    /* ===== шапка ===== */
-    #top{display:flex;align-items:center;justify-content:space-between}
-    #top h3{display:flex;align-items:center;gap:8px;font-size:20px;font-weight:600;color:var(--c-text)}
-    .ver{font-size:11px;color:#174ea6;font-weight:600;background:#e3ecf7;padding:1px 8px;border-radius:10px}
-    #newChat{background:#fff;color:#555;border:1px solid var(--c-border)}
-    #newChat:hover{background:#f5f5f5;border-color:var(--c-border-hover);color:#555}
-    #newChat:active{background:#e8e8e8}
-    /* ===== учётная запись текущего пользователя ===== */
-    #topRight{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
-    #topRight .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-    #whoami{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-3);
-        white-space:nowrap;max-width:340px;overflow:hidden}
-    #whoami[hidden]{display:none}
-    #whoami .nm{overflow:hidden;text-overflow:ellipsis}
-    #whoami .adm{background:var(--c-primary-light);color:#174ea6;font-weight:600;font-size:10px;
-        padding:1px 8px;border-radius:10px;flex:none}
-    /* ===== поля ввода: рамка #d0d0d0, фокус — синий ореол ===== */
-    input,select,textarea{font-family:inherit;font-size:13px;color:var(--c-text);
-        padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--r);background:#fff;
-        box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease}
-    input::placeholder,textarea::placeholder{color:#aaa}
-    input:hover,select:hover,textarea:hover{border-color:var(--c-border-hover)}
-    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--c-primary);
-        box-shadow:0 0 0 2px rgba(25,118,210,.12)}
-    input[type=number]{-moz-appearance:textfield}
-    input[type=number]::-webkit-outer-spin-button,
-    input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+        /* ===== шапка ===== */
+        #top{display:flex;align-items:center;justify-content:space-between}
+        #top h3{display:flex;align-items:center;gap:8px;font-size:20px;font-weight:600;color:var(--c-text)}
+        .ver{font-size:11px;color:#174ea6;font-weight:600;background:#e3ecf7;padding:1px 8px;border-radius:10px}
+        #newChat{background:#fff;color:#555;border:1px solid var(--c-border)}
+        #newChat:hover{background:#f5f5f5;border-color:var(--c-border-hover);color:#555}
+        #newChat:active{background:#e8e8e8}
+        /* ===== учётная запись текущего пользователя ===== */
+        #topRight{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+        #topRight .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+        #whoami{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-3);
+            white-space:nowrap;max-width:340px;overflow:hidden}
+        #whoami[hidden]{display:none}
+        #whoami .nm{overflow:hidden;text-overflow:ellipsis}
+        #whoami .adm{background:var(--c-primary-light);color:#174ea6;font-weight:600;font-size:10px;
+            padding:1px 8px;border-radius:10px;flex:none}
+        /* ===== поля ввода: рамка #d0d0d0, фокус — синий ореол ===== */
+        input,select,textarea{font-family:inherit;font-size:13px;color:var(--c-text);
+            padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--r);background:#fff;
+            box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease}
+        input::placeholder,textarea::placeholder{color:#aaa}
+        input:hover,select:hover,textarea:hover{border-color:var(--c-border-hover)}
+        input:focus,select:focus,textarea:focus{outline:none;border-color:var(--c-primary);
+            box-shadow:0 0 0 2px rgba(25,118,210,.12)}
+        input[type=number]{-moz-appearance:textfield}
+        input[type=number]::-webkit-outer-spin-button,
+        input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 
-    /* ===== кнопки ===== */
-    button{padding:8px 16px;border:none;border-radius:var(--r);background-color:var(--c-primary);color:#fff;
-        font-family:inherit;font-size:13px;cursor:pointer;
-        transition:background-color .15s ease,opacity .15s ease}
-    button:hover{background-color:var(--c-primary-hover)}
-    button:active{background-color:var(--c-primary-active)}
-    button:disabled{opacity:.5;cursor:not-allowed}
-    button.gray{background:#fff;color:#555;border:1px solid var(--c-border)}
-    button.gray:hover{background:#f5f5f5;border-color:var(--c-border-hover)}
-    button.gray:active{background:#e8e8e8}
-    button.warn{background:#d32f2f}
-    button.warn:hover,button.warn:active{background:#b71c1c}
+        /* ===== кнопки ===== */
+        button{padding:8px 16px;border:none;border-radius:var(--r);background-color:var(--c-primary);color:#fff;
+            font-family:inherit;font-size:13px;cursor:pointer;
+            transition:background-color .15s ease,opacity .15s ease}
+        button:hover{background-color:var(--c-primary-hover)}
+        button:active{background-color:var(--c-primary-active)}
+        button:disabled{opacity:.5;cursor:not-allowed}
+        button.gray{background:#fff;color:#555;border:1px solid var(--c-border)}
+        button.gray:hover{background:#f5f5f5;border-color:var(--c-border-hover)}
+        button.gray:active{background:#e8e8e8}
+        button.warn{background:#d32f2f}
+        button.warn:hover,button.warn:active{background:#b71c1c}
 
-    /* ===== переключатель режима чата ===== */
-    #modeRow{display:flex;gap:6px;margin-top:12px}
-    .mode{flex:none;padding:6px 14px;font-size:13px;border:1px solid var(--c-border);border-radius:var(--r);
-        background:#fff;color:#555;transition:all .15s ease}
-    .mode.on{background:var(--c-primary);border-color:var(--c-primary);color:#fff;font-weight:600}
-    .mode:not(.on):hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
+        /* ===== переключатель режима чата ===== */
+        #modeRow{display:flex;gap:6px;margin-top:12px}
+        .mode{flex:none;padding:6px 14px;font-size:13px;border:1px solid var(--c-border);border-radius:var(--r);
+            background:#fff;color:#555;transition:all .15s ease}
+        .mode.on{background:var(--c-primary);border-color:var(--c-primary);color:#fff;font-weight:600}
+        .mode:not(.on):hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
 
-    /* ===== вкладки: активная подчёркнута синим (как в корпоративных диалогах) ===== */
-    #tabs{display:flex;gap:4px;margin-top:12px;border-bottom:2px solid var(--c-border-soft)}
-    #tabs[hidden]{display:none}
-    .tab{flex:1;padding:10px 12px;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;
-        background:transparent;color:#666;font-size:14px;font-weight:500;border-radius:0;
-        transition:color .2s ease,background-color .2s ease}
-    .tab:hover{background:#f5f5f5;color:var(--c-text)}
-    .tab.on{color:var(--c-primary);border-bottom-color:var(--c-primary);font-weight:600;background:transparent}
+        /* ===== вкладки: активная подчёркнута синим (как в корпоративных диалогах) ===== */
+        #tabs{display:flex;gap:4px;margin-top:12px;border-bottom:2px solid var(--c-border-soft)}
+        #tabs[hidden]{display:none}
+        .tab{flex:1;padding:10px 12px;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;
+            background:transparent;color:#666;font-size:14px;font-weight:500;border-radius:0;
+            transition:color .2s ease,background-color .2s ease}
+        .tab:hover{background:#f5f5f5;color:var(--c-text)}
+        .tab.on{color:var(--c-primary);border-bottom-color:var(--c-primary);font-weight:600;background:transparent}
 
-    /* ===== панели вкладок ===== */
-    #viewAdmin,#viewPrompts{display:flex;flex-direction:column;gap:16px;
-        height:calc(62vh + 58px);overflow-y:auto}
-    #viewAdmin[hidden],#viewPrompts[hidden]{display:none}   /* display:flex перебивает hidden */
+        /* ===== панели вкладок ===== */
+        #viewAdmin,#viewPrompts{display:flex;flex-direction:column;gap:16px;
+            height:calc(62vh + 58px);overflow-y:auto}
+        #viewAdmin[hidden],#viewPrompts[hidden]{display:none}   /* display:flex перебивает hidden */
 
-    /* ===== чат ===== */
-    #chat{display:flex;flex-direction:column;gap:10px;height:62vh;overflow-y:auto;padding:16px;
-        background:var(--c-card);border:1px solid var(--c-border-table);border-radius:var(--r)}
-    .m{position:relative;padding:10px 14px;border-radius:var(--r);line-height:1.55;font-size:14px}
-    /* ===== удаление сообщений: ✕ при наведении ===== */
-    .m .del{position:absolute;top:3px;right:5px;display:none;cursor:pointer;color:var(--c-text-3);
-        font-family:inherit;font-weight:700;font-size:12px;line-height:1.3;padding:2px 6px;
-        border-radius:3px;background:rgba(255,255,255,.85)}
-    .m:hover .del{display:block}
-    .m .del:hover{background:var(--c-err-bg);color:var(--c-err)}
-    .u{align-self:flex-end;background:#bbedfd;white-space:pre-wrap;max-width:80%}
-    .a{align-self:flex-start;background:var(--c-section);border:1px solid var(--c-border-soft);width:88%}
-    .a .p{margin:6px 0;font-size:14px;color:var(--c-text)}
-    .a h4{margin:12px 0 6px;font-size:1em;font-weight:600;color:var(--c-text);
-        border-bottom:1px solid var(--c-border-soft);padding-bottom:4px}
-    .a h4:first-child{margin-top:0}
-    .a strong{color:var(--c-text)}
-    .a ul,.a ol{margin:8px 0;padding:0;list-style:none;counter-reset:li}
-    .a li{position:relative;margin:4px 0;padding:4px 10px 4px 26px;background:#fff;
-        border-left:3px solid var(--c-primary);border-radius:0 var(--r) var(--r) 0;font-size:14px}
-    .a ul li::before{content:"▪";position:absolute;left:10px;color:var(--c-primary)}
-    .a ol li::before{counter-increment:li;content:counter(li);position:absolute;left:8px;top:5px;
-        background:var(--c-primary);color:#fff;border-radius:2px;font-size:11px;min-width:15px;
-        text-align:center;padding:1px 2px}
-    .a blockquote{margin:10px 0;padding:8px 14px;border-left:4px solid #fb8c00;background:var(--c-warn-bg);
-        border-radius:0 var(--r) var(--r) 0;color:#6d4c41;font-style:italic;font-size:13px}
-    .a blockquote::before{content:"❝ ";color:var(--c-warn)}
-    .a code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:.9em}
-    .a pre{background:#f5f5f5;border:1px solid var(--c-border-soft);border-radius:var(--r);
-        padding:10px;overflow-x:auto;margin:8px 0}
-    .a hr{border:0;border-top:1px solid var(--c-border-soft);margin:8px 0}
+        /* ===== чат ===== */
+        #chat{display:flex;flex-direction:column;gap:10px;height:62vh;overflow-y:auto;padding:16px;
+            background:var(--c-card);border:1px solid var(--c-border-table);border-radius:var(--r)}
+        .m{position:relative;padding:10px 14px;border-radius:var(--r);line-height:1.55;font-size:14px}
+        /* ===== удаление сообщений: ✕ при наведении ===== */
+        .m .del{position:absolute;top:3px;right:5px;display:none;cursor:pointer;color:var(--c-text-3);
+            font-family:inherit;font-weight:700;font-size:12px;line-height:1.3;padding:2px 6px;
+            border-radius:3px;background:rgba(255,255,255,.85)}
+        .m:hover .del{display:block}
+        .m .del:hover{background:var(--c-err-bg);color:var(--c-err)}
+        .u{align-self:flex-end;background:#bbedfd;white-space:pre-wrap;max-width:80%}
+        .a{align-self:flex-start;background:var(--c-section);border:1px solid var(--c-border-soft);width:88%}
+        .a .p{margin:6px 0;font-size:14px;color:var(--c-text)}
+        .a h4{margin:12px 0 6px;font-size:1em;font-weight:600;color:var(--c-text);
+            border-bottom:1px solid var(--c-border-soft);padding-bottom:4px}
+        .a h4:first-child{margin-top:0}
+        .a strong{color:var(--c-text)}
+        .a ul,.a ol{margin:8px 0;padding:0;list-style:none;counter-reset:li}
+        .a li{position:relative;margin:4px 0;padding:4px 10px 4px 26px;background:#fff;
+            border-left:3px solid var(--c-primary);border-radius:0 var(--r) var(--r) 0;font-size:14px}
+        .a ul li::before{content:"▪";position:absolute;left:10px;color:var(--c-primary)}
+        .a ol li::before{counter-increment:li;content:counter(li);position:absolute;left:8px;top:5px;
+            background:var(--c-primary);color:#fff;border-radius:2px;font-size:11px;min-width:15px;
+            text-align:center;padding:1px 2px}
+        .a blockquote{margin:10px 0;padding:8px 14px;border-left:4px solid #fb8c00;background:var(--c-warn-bg);
+            border-radius:0 var(--r) var(--r) 0;color:#6d4c41;font-style:italic;font-size:13px}
+        .a blockquote::before{content:"❝ ";color:var(--c-warn)}
+        .a code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:.9em}
+        .a pre{background:#f5f5f5;border:1px solid var(--c-border-soft);border-radius:var(--r);
+            padding:10px;overflow-x:auto;margin:8px 0}
+        .a hr{border:0;border-top:1px solid var(--c-border-soft);margin:8px 0}
 
-    .cite{display:inline-block;background:#fff;border:1px solid var(--c-primary);color:var(--c-primary);
-        border-radius:var(--r);padding:0 8px;font-size:.8em;line-height:1.7;white-space:nowrap;
-        vertical-align:baseline}
-    .cite::before{content:"📄 "}
-    .cite.linked{cursor:pointer;transition:background-color .15s ease,border-color .15s ease}
-    .cite.linked:hover{background:var(--c-primary-lighter);border-color:var(--c-primary-hover)}
+        .cite{display:inline-block;background:#fff;border:1px solid var(--c-primary);color:var(--c-primary);
+            border-radius:var(--r);padding:0 8px;font-size:.8em;line-height:1.7;white-space:nowrap;
+            vertical-align:baseline}
+        .cite::before{content:"📄 "}
+        .cite.linked{cursor:pointer;transition:background-color .15s ease,border-color .15s ease}
+        .cite.linked:hover{background:var(--c-primary-lighter);border-color:var(--c-primary-hover)}
 
-    .sources{align-self:flex-start;width:88%;background:var(--c-section);border:1px dashed var(--c-border);
-        border-radius:var(--r);padding:10px 12px;margin-top:-2px;
-        font-family:Consolas,"Courier New",monospace}
-    .sources .t{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;font-size:10.5px;font-weight:700;
-        color:var(--c-text-3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px}
-    .srow{display:flex;gap:8px;align-items:baseline;padding:3px 6px;font-size:12.5px;
-        color:var(--c-text-2);border-radius:3px}
-    .srow i{font-style:normal;background:var(--c-text-3);color:#fff;border-radius:3px;min-width:17px;
-        text-align:center;font-size:10.5px;padding:1px 3px;flex:none}
-    .srow b{color:var(--c-text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .srow b a{color:var(--c-primary);text-decoration:none}
-    .srow b a:hover{text-decoration:underline}
-    .srow.flash{animation:fl 1.4s}
-    @keyframes fl{0%,45%{background:var(--c-primary-light)}100%{background:transparent}}
+        .sources{align-self:flex-start;width:88%;background:var(--c-section);border:1px dashed var(--c-border);
+            border-radius:var(--r);padding:10px 12px;margin-top:-2px;
+            font-family:Consolas,"Courier New",monospace}
+        .sources .t{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;font-size:10.5px;font-weight:700;
+            color:var(--c-text-3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px}
+        .srow{display:flex;gap:8px;align-items:baseline;padding:3px 6px;font-size:12.5px;
+            color:var(--c-text-2);border-radius:3px}
+        .srow i{font-style:normal;background:var(--c-text-3);color:#fff;border-radius:3px;min-width:17px;
+            text-align:center;font-size:10.5px;padding:1px 3px;flex:none}
+        .srow b{color:var(--c-text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .srow b a{color:var(--c-primary);text-decoration:none}
+        .srow b a:hover{text-decoration:underline}
+        .srow.flash{animation:fl 1.4s}
+        @keyframes fl{0%,45%{background:var(--c-primary-light)}100%{background:transparent}}
 
-    #f{display:flex;gap:8px;margin-top:10px}
-    #cls{max-width:230px;cursor:pointer}
-    #i{flex:1;min-width:0}
+        #f{display:flex;gap:8px;margin-top:10px}
+        #cls{max-width:230px;cursor:pointer}
+        #i{flex:1;min-width:0}
 
-    /* ===== прикреплённые файлы свободного чата ===== */
-    #dfiles{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-    #dfiles[hidden]{display:none}
-    .dfile{display:inline-flex;align-items:center;gap:6px;background:#fff;
-        border:1px solid var(--c-primary-lighter);border-radius:var(--r);
-        padding:4px 6px 4px 10px;font-size:12.5px;color:var(--c-text)}
-    .dfile .nm{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .dfile .x{cursor:pointer;color:var(--c-text-3);font-weight:700;padding:0 5px;border-radius:3px}
-    .dfile .x:hover{background:var(--c-err-bg);color:var(--c-err)}
+        /* ===== прикреплённые файлы свободного чата ===== */
+        #dfiles{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+        #dfiles[hidden]{display:none}
+        .dfile{display:inline-flex;align-items:center;gap:6px;background:#fff;
+            border:1px solid var(--c-primary-lighter);border-radius:var(--r);
+            padding:4px 6px 4px 10px;font-size:12.5px;color:var(--c-text)}
+        .dfile .nm{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dfile .x{cursor:pointer;color:var(--c-text-3);font-weight:700;padding:0 5px;border-radius:3px}
+        .dfile .x:hover{background:var(--c-err-bg);color:var(--c-err)}
 
-    /* ===== карточки админки ===== */
-    .acard{border:1px solid var(--c-border-table);border-radius:var(--r);padding:15px;background:var(--c-card)}
-    .ahead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;
-        padding-bottom:8px;border-bottom:1px solid var(--c-border-soft)}
-    .ahead b{color:var(--c-text);font-size:14px;font-weight:600}
-    .sm{padding:5px 12px;font-size:12px;background:#fff;color:var(--c-text-2);border:1px solid var(--c-border)}
-    .sm:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
-    /* ===== кнопки-иконки в строках таблиц (удаление карточек с ошибками) ===== */
-    .icobtn{padding:3px 9px;font-size:13px;background:#fff;color:var(--c-text-2);
-        border:1px solid var(--c-border);border-radius:3px;line-height:1.4}
-    .icobtn:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
-    .icobtn.del:hover{background:var(--c-err-bg);border-color:var(--c-err);color:var(--c-err)}
-    .arow{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
-    .arow input{flex:1;min-width:230px}
-    .sb{display:inline-block;background:#fff;border:1px solid var(--c-border-soft);border-radius:var(--r);
-        padding:4px 10px;margin:2px 5px 2px 0;font-size:13px;color:var(--c-text-2)}
-    .sb b{font-size:14px}
-    .paused{background:var(--c-err-bg);border:1px solid #ef9a9a;color:var(--c-err);border-radius:var(--r);
-        padding:8px 12px;margin-bottom:8px;font-size:13px}
-    .mono{font-family:Consolas,"Courier New",monospace;font-size:12.5px;color:var(--c-text);
-        white-space:pre-wrap;word-break:break-word}
-    .mono.ok{color:var(--c-ok)}
-    .mono.bad{color:var(--c-err)}
+        /* ===== карточки админки ===== */
+        .acard{border:1px solid var(--c-border-table);border-radius:var(--r);padding:15px;background:var(--c-card)}
+        .ahead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;
+            padding-bottom:8px;border-bottom:1px solid var(--c-border-soft)}
+        .ahead b{color:var(--c-text);font-size:14px;font-weight:600}
+        /* ===== сворачиваемые карточки: клик по заголовку — в одну строку ===== */
+        .acard>.ahead{cursor:pointer;user-select:none}
+        .ahleft{display:flex;align-items:center;gap:7px;min-width:0}   /* стрелка+заголовок слева, кнопки ⟳ справа */
+        .acard .tw{flex:none;color:var(--c-text-3);font-size:11px;line-height:1}
+        .acard.closed>.abody{display:none}
+        .acard.closed{padding:9px 15px}
+        .acard.closed>.ahead{margin-bottom:0;padding-bottom:0;border-bottom-color:transparent}
 
-    /* ===== таблицы ===== */
-    .tbl{width:100%;border-collapse:collapse;font-size:13px}
-    .tbl th{text-align:left;color:var(--c-text-2);font-weight:600;padding:10px 12px;
-        background:var(--c-section);border-bottom:1px solid var(--c-border-table);white-space:nowrap}
-    .tbl td{padding:8px 12px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word}
-    .tbl tbody tr:hover{background:#f9f9f9}
-    .gw{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-        vertical-align:bottom}
+        .sm{padding:5px 12px;font-size:12px;background:#fff;color:var(--c-text-2);border:1px solid var(--c-border)}
+        .sm:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
+        /* ===== кнопки-иконки в строках таблиц (удаление карточек с ошибками) ===== */
+        .icobtn{padding:3px 9px;font-size:13px;background:#fff;color:var(--c-text-2);
+            border:1px solid var(--c-border);border-radius:3px;line-height:1.4}
+        .icobtn:hover{background:var(--c-primary-light);border-color:var(--c-primary);color:var(--c-primary)}
+        .icobtn.del:hover{background:var(--c-err-bg);border-color:var(--c-err);color:var(--c-err)}
+        .arow{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
+        .arow input{flex:1;min-width:230px}
+        .sb{display:inline-block;background:#fff;border:1px solid var(--c-border-soft);border-radius:var(--r);
+            padding:4px 10px;margin:2px 5px 2px 0;font-size:13px;color:var(--c-text-2)}
+        .sb b{font-size:14px}
+        .paused{background:var(--c-err-bg);border:1px solid #ef9a9a;color:var(--c-err);border-radius:var(--r);
+            padding:8px 12px;margin-bottom:8px;font-size:13px}
+        .mono{font-family:Consolas,"Courier New",monospace;font-size:12.5px;color:var(--c-text);
+            white-space:pre-wrap;word-break:break-word}
+        .mono.ok{color:var(--c-ok)}
+        .mono.bad{color:var(--c-err)}
 
-    /* ===== вкладка «Промты» ===== */
-    .pta{width:100%;min-height:190px;box-sizing:border-box;resize:vertical;
-        font-family:Consolas,"Courier New",monospace;font-size:12.5px;line-height:1.45;
-        padding:8px 10px;white-space:pre;overflow:auto}
-    .pkey{font-family:Consolas,"Courier New",monospace;font-size:11px;color:var(--c-text-3)}
-    .pstat{font-size:12px;color:var(--c-text-3);margin-top:4px}
-    .pstat.err{color:var(--c-err)}
+        /* ===== таблицы ===== */
+        .tbl{width:100%;border-collapse:collapse;font-size:13px}
+        .tbl th{text-align:left;color:var(--c-text-2);font-weight:600;padding:10px 12px;
+            background:var(--c-section);border-bottom:1px solid var(--c-border-table);white-space:nowrap}
+        .tbl td{padding:8px 12px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word}
+        .tbl tbody tr:hover{background:#f9f9f9}
+        .gw{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+            vertical-align:bottom}
 
-    /* ===== eval ===== */
-    #evalHistory tr[data-run]{cursor:pointer}
-    #evalHistory tr[data-run]:hover{background:#f9f9f9}
-    #evalHistory tr.sel,#evalHistory tr.sel:hover{background:var(--c-primary-light)}
-    .delta-up{color:var(--c-ok);font-weight:600}
-    .delta-down{color:var(--c-err);font-weight:600}
-</style></head><body>
+        /* ===== вкладка «Промты» ===== */
+        .pta{width:100%;min-height:190px;box-sizing:border-box;resize:vertical;
+            font-family:Consolas,"Courier New",monospace;font-size:12.5px;line-height:1.45;
+            padding:8px 10px;white-space:pre;overflow:auto}
+        .pkey{font-family:Consolas,"Courier New",monospace;font-size:11px;color:var(--c-text-3)}
+        .pstat{font-size:12px;color:var(--c-text-3);margin-top:4px}
+        .pstat.err{color:var(--c-err)}
+
+        /* ===== eval ===== */
+        #evalHistory tr[data-run]{cursor:pointer}
+        #evalHistory tr[data-run]:hover{background:#f9f9f9}
+        #evalHistory tr.sel,#evalHistory tr.sel:hover{background:var(--c-primary-light)}
+        .delta-up{color:var(--c-ok);font-weight:600}
+        .delta-down{color:var(--c-err);font-weight:600}
+    </style></head><body>
 <div id="top">
     <h3>Чат по базе знаний DocsVision <span class="ver">v5.3</span></h3>
     <div id="topRight">
@@ -250,7 +258,7 @@
 <!-- ==================== вкладка «Админ» ==================== -->
 <div id="viewAdmin" hidden>
 
-    <div class="acard">
+    <div class="acard" data-open>
         <div class="ahead"><b>Состояние индексации</b>
             <button type="button" class="sm" id="btnStats">⟳ Обновить</button></div>
         <div id="stats" class="mono">—</div>
@@ -364,6 +372,18 @@
             Ответ LLM может идти до пары минут.</div>
     </div>
 
+    <div class="acard">
+        <div class="ahead"><b>Удалить ошибочные документы (последние 20)</b>
+            <button type="button" class="sm" id="btnErr">⟳ Обновить</button></div>
+        <div id="errs"></div>
+    </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Проиндексированные файлы (последние 200)</b>
+            <button type="button" class="sm" id="btnFiles">⟳ Обновить</button></div>
+        <div id="files"></div>
+    </div>
+
 </div>
 
 <!-- ==================== вкладка «Промты» ==================== -->
@@ -389,30 +409,19 @@
         </div>
         <div id="extOutP" class="mono">Файл → /api/rag/extract → JSON по схеме из карточки выше.</div>
     </div>
+
+    <div class="acard">
+        <div class="ahead"><b>Ошибки индексации (последние 20)</b>
+            <button type="button" class="sm" id="btnErrP">⟳ Обновить</button></div>
+        <div class="mono" style="font-size:11.5px;color:#888">Карточки, не прошедшие индексацию
+            (status E или ждут ретрая с ошибкой; строки свернуты в карточки — файлов может быть
+            несколько). 🗑 удаляет карточку ЦЕЛИКОМ из базы знаний RAG: строки заявки, чанки,
+            эмбеддинги и векторы Chroma. Документ в DocsVision не трогается; если заявка
+            появится снова при синхронизации — карточка вернётся как новая.</div>
+        <div id="errsP"><div class="mono">нажмите ⟳ Обновить</div></div>
+    </div>
 </div>
 
-<div class="acard">
-    <div class="ahead"><b>Ошибки индексации (последние 20)</b>
-        <button type="button" class="sm" id="btnErrP">⟳ Обновить</button></div>
-    <div class="mono" style="font-size:11.5px;color:#888">Карточки, не прошедшие индексацию
-        (status E или ждут ретрая с ошибкой; строки свернуты в карточки — файлов может быть
-        несколько). 🗑 удаляет карточку ЦЕЛИКОМ из базы знаний RAG: строки заявки, чанки,
-        эмбеддинги и векторы Chroma. Документ в DocsVision не трогается; если заявка
-        появится снова при синхронизации — карточка вернётся как новая.</div>
-    <div id="errsP"><div class="mono">нажмите ⟳ Обновить</div></div>
-</div>
-
-<div class="acard">
-    <div class="ahead"><b>Удалить ошибочные документы (последние 20)</b>
-        <button type="button" class="sm" id="btnErr">⟳ Обновить</button></div>
-    <div id="errs"></div>
-</div>
-
-<div class="acard">
-    <div class="ahead"><b>Проиндексированные файлы (последние 200)</b>
-        <button type="button" class="sm" id="btnFiles">⟳ Обновить</button></div>
-    <div id="files"></div>
-</div>
 <script type="module">
     console.info('RAG UI v5.3 — вкладки «Админ-панель»/«Промты» по правам пользователя (/api/rag/me), а не по ?adminPanel=1');
     /* crypto.randomUUID() есть только в secure context (https/localhost);
@@ -943,6 +952,48 @@
     const actOut = $('actOut'), selfOut = $('selfOut');
     let adminInit = false, promptsInit = false;
 
+    /* ---------- сворачиваемые карточки: клик по заголовку сворачивает в одну строку ---------- */
+    /** Карточка → «заголовок + .abody»: клик по заголовку (НЕ по кнопкам ⟳ в нём)
+     *  сворачивает тело. open — исходное состояние. Карточки без .ahead
+     *  (текст-подсказка вкладки «Промты») не сворачиваются. */
+    function makeCollapsible(card, open) {
+        const head = card.querySelector(':scope > .ahead');
+        if (!head || card.dataset.collapsible) return;
+        card.dataset.collapsible = '1';
+        const tw = document.createElement('span');
+        tw.className = 'tw';
+        tw.textContent = '▸';
+        const left = document.createElement('span');   // стрелка + заголовок одним «левым» элементом:
+        left.className = 'ahleft';                     // иначе space-between утащит заголовок в центр
+        const title = head.querySelector('b');
+        if (title) {
+            left.append(tw, title);                    // append переносит b внутрь .ahleft
+            head.prepend(left);                        // .ahleft — первым, кнопки ⟳ остаются справа
+        } else {
+            head.prepend(tw);
+        }
+        const body = document.createElement('div');    // всё, кроме заголовка, — тело
+        body.className = 'abody';
+        [...card.children].forEach(ch => { if (ch !== head) body.append(ch); });
+        card.append(body);
+        const setState = o => {
+            card.classList.toggle('closed', !o);
+            tw.textContent = o ? '▾' : '▸';
+        };
+        setState(open);
+        head.addEventListener('click', e => {
+            if (e.target.closest('button,input,select,textarea,a')) return;   // ⟳ Обновить и пр. не сворачивают
+            setState(card.classList.contains('closed'));
+        });
+    }
+
+    /** Статичные карточки страницы: раскрыта только помеченная data-open («Состояние индексации»). */
+    function initCollapsible() {
+        document.querySelectorAll('.acard').forEach(c =>
+            makeCollapsible(c, c.dataset.open !== undefined));
+    }
+    initCollapsible();
+
     /* единый вызов API: всегда JSON, ошибки бэкенда — в исключение */
     async function api(url, opts) {
         const r = await fetch(url, opts);
@@ -962,9 +1013,6 @@
     }
 
     function showTab(name) {
-        if (name === 'prompts' && !promptsInit) {
-            promptsInit = true; loadPrompts(); loadErrorsP();
-        }
         if (name !== 'chat' && !isAdmin) return;   // без права edit:admin доступен только чат
         for (const [k, v] of Object.entries(TABS)) {
             $(v.tab).classList.toggle('on', k === name);
@@ -975,7 +1023,7 @@
             loadExtFields($('extFields'));
         }
         if (name === 'prompts' && !promptsInit) {
-            promptsInit = true; loadPrompts();
+            promptsInit = true; loadPrompts(); loadErrorsP();
         }
     }
 
@@ -1380,7 +1428,7 @@
         }
     };
 
-    /* ---- последние ошибки индексации ---- */
+    /* ---- ошибки индексации (админ-вкладка): просмотр + удаление карточки ---- */
     async function loadErrors() {
         const el = $('errs');
         el.innerHTML = '<div class="mono">загружаю…</div>';
@@ -1390,15 +1438,22 @@
                 el.innerHTML = '<div class="mono ok">Ошибок нет ✓</div>';
                 return;
             }
-            let h = '<table class="tbl"><tr><th>GUID</th><th>ретраи</th><th>ошибка</th><th>когда</th></tr>';
+            let h = '<table class="tbl"><tr><th>документ</th><th>GUID</th><th>ретраи</th>'
+                + '<th>ошибка</th><th>когда</th><th style="width:40px"></th></tr>';
             for (const r of list) {
-                h += '<tr><td class="mono"><span class="gw" title="' + esc(String(r.guid || '')) + '">'
+                h += '<tr><td><span class="gw" style="max-width:220px" title="' + esc(String(r.name || '')) + '">'
+                    + esc(String(r.name || '')) + '</span></td>'
+                    + '<td class="mono"><span class="gw" title="' + esc(String(r.guid || '')) + '">'
                     + esc(String(r.guid || '')) + '</span></td>'
                     + '<td>' + Number(r.retries || 0) + '</td>'
                     + '<td>' + esc(String(r.error || '')) + '</td>'
-                    + '<td class="mono">' + esc(String(r.at || '')) + '</td></tr>';
+                    + '<td class="mono">' + esc(String(r.at || '').slice(0, 19)) + '</td>'
+                    + '<td><button type="button" class="icobtn del" data-g="' + esc(String(r.guid || ''))
+                    + '" data-n="' + esc(String(r.name || '')) + '" title="Удалить карточку из базы знаний RAG">🗑</button></td></tr>';
             }
             el.innerHTML = h + '</table>';
+            el.querySelectorAll('button[data-g]').forEach(b =>
+                b.onclick = () => delErrorCard(b.dataset.g, b.dataset.n, b, loadErrors));
         } catch (e) {
             el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
         }
@@ -1561,7 +1616,7 @@
             }
             el.innerHTML = h + '</table>';
             el.querySelectorAll('button[data-g]').forEach(b =>
-                b.onclick = () => delErrorCard(b.dataset.g, b.dataset.n, b));
+                b.onclick = () => delErrorCard(b.dataset.g, b.dataset.n, b, loadErrorsP));
         } catch (e) {
             el.innerHTML = '<div class="mono bad">⚠ ' + esc(e.message) + '</div>';
         }
@@ -1589,7 +1644,8 @@
         return [...by.values()];
     }
 
-    async function delErrorCard(guid, name, btn) {
+    /** Удаление карточки из базы знаний RAG; reload — таблица, из которой нажали (для перерисовки). */
+    async function delErrorCard(guid, name, btn, reload) {
         const what = name ? '«' + name + '»\n' : '';
         if (!confirm('Удалить карточку из базы знаний RAG?\n\n' + what + guid
             + '\n\nУйдут ВСЕ строки заявки (по одной на файл), чанки, эмбеддинги и векторы Chroma.'
@@ -1597,7 +1653,7 @@
         btn.disabled = true;
         try {
             await api('/api/rag/admin/errors/' + encodeURIComponent(guid), {method: 'DELETE'});
-            loadErrorsP();                 // перерисовка — удалённой карточки в списке уже нет
+            (reload || loadErrorsP)();      // обновляем ту таблицу, из которой удалили
         } catch (e) {
             alert('Не удалено: ' + e.message);
             btn.disabled = false;
@@ -1734,6 +1790,7 @@
         };
 
         card.append(head, key, ta, hint, row, stat);
+        makeCollapsible(card, false);   // свёрнута в строку, как остальные; true — если хотите раскрытой
         return card;
     }
 
